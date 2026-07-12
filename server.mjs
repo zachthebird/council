@@ -278,6 +278,7 @@ class Run {
       leader: this.leader,
       verdict: this.verdict,
       error: this.error,
+      sessions: this.sessions,
       critiques: this.critiques,
       finalReview: this.finalReview,
       published: this.published,
@@ -285,6 +286,52 @@ class Run {
       createdAt: this.createdAt,
     };
   }
+}
+
+/** Stages that cannot survive a dead server because an agent turn was in
+ * flight; runs found in these stages at startup are marked interrupted. */
+const IN_FLIGHT_STAGES = new Set(["created", "generating", "critiquing", "integrating", "final_review"]);
+
+async function rehydrateRuns() {
+  let entries;
+  try {
+    entries = await readdir(RUNS_DIR);
+  } catch {
+    return;
+  }
+  const restored = [];
+  for (const id of entries) {
+    let state;
+    try {
+      state = JSON.parse(await readFile(join(RUNS_DIR, id, "state.json"), "utf8"));
+    } catch {
+      continue;
+    }
+    const run = new Run(state.id ?? id, state.prompt ?? "", state.seedRepo ?? null);
+    run.stage = state.stage ?? "failed";
+    run.leader = state.leader ?? null;
+    run.verdict = state.verdict ?? null;
+    run.error = state.error ?? null;
+    run.sessions = state.sessions ?? { claude: null, codex: null };
+    run.critiques = state.critiques ?? { claude: null, codex: null };
+    run.finalReview = state.finalReview ?? null;
+    run.published = state.published ?? null;
+    run.actorStatus = state.actorStatus ?? { claude: "idle", codex: "idle" };
+    run.createdAt = state.createdAt ?? new Date(0).toISOString();
+    if (IN_FLIGHT_STAGES.has(run.stage)) {
+      run.error = "interrupted by a server restart; start a new run";
+      for (const actor of ACTORS) {
+        if (run.actorStatus[actor] === "working") run.actorStatus[actor] = "failed";
+      }
+      run.stage = "failed";
+      emit(run, "system", "note", run.error);
+      setStage(run, "failed");
+    }
+    restored.push(run);
+  }
+  restored.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const run of restored) runs.set(run.id, run);
+  if (restored.length > 0) console.log(`rehydrated ${restored.length} run(s) from disk`);
 }
 
 function emit(run, actor, kind, text) {
@@ -562,7 +609,24 @@ const server = createServer(async (request, response) => {
   }
 });
 
+function shutdown() {
+  for (const run of runs.values()) {
+    for (const child of run.children) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Best-effort cleanup; the process is exiting regardless.
+      }
+    }
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2_000).unref();
+}
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+
 await mkdir(RUNS_DIR, { recursive: true });
+await rehydrateRuns();
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`council listening on http://127.0.0.1:${PORT}`);
 });
