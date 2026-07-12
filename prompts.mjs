@@ -37,24 +37,29 @@ export function critiquePrompt(counterpartName, counterpartCode) {
   ].join("\n");
 }
 
-export function integratePrompt(ownCritiqueOfCounterpart, counterpartCritiqueOfOwn) {
+export function integratePrompt(counterpartCode, ownCritiqueOfCounterpart, counterpartCritiqueOfOwn) {
   return [
     "You have been selected as the LEADER: your solution is the base for the",
     "final implementation.",
     "",
-    "Below are two critiques: your counterpart's critique of YOUR solution,",
-    "and your own earlier critique of THEIR solution. Strengthen the final",
-    "result as much as possible: work in the genuine strengths identified in",
-    "the counterpart's approach, and address every legitimate weakness the",
-    "counterpart found in yours. If a criticism is wrong, you may reject it,",
-    "but say so explicitly in your summary. Modify the files in your working",
-    "directory now, then summarize exactly what you changed and why.",
+    "Below are two critiques - your counterpart's critique of YOUR solution,",
+    "and your own earlier critique of THEIR solution - plus the counterpart's",
+    "complete code so you can lift concrete strengths directly rather than",
+    "from memory. Strengthen the final result as much as possible: work in",
+    "the genuine strengths of the counterpart's approach, and address every",
+    "legitimate weakness the counterpart found in yours. If a criticism is",
+    "wrong, you may reject it, but say so explicitly in your summary. Modify",
+    "the files in your working directory now, then summarize exactly what you",
+    "changed and why.",
     "",
     "=== COUNTERPART'S CRITIQUE OF YOUR SOLUTION ===",
-    counterpartCritiqueOfOwn,
+    counterpartCritiqueOfOwn ?? "(unavailable: the counterpart's critique turn failed)",
     "",
     "=== YOUR EARLIER CRITIQUE OF THEIR SOLUTION (for reference) ===",
-    ownCritiqueOfCounterpart,
+    ownCritiqueOfCounterpart ?? "(unavailable: your critique turn failed)",
+    "",
+    "=== COUNTERPART'S COMPLETE SOLUTION (for reference) ===",
+    counterpartCode ?? "(unavailable)",
   ].join("\n");
 }
 

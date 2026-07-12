@@ -8,7 +8,7 @@
   :root {
     --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8ee;
     --muted: #8b93a5; --claude: #d97748; --codex: #4fb6a6; --accent: #7aa2f7;
-    --good: #4caf7d; --bad: #e06c75;
+    --good: #4caf7d; --bad: #e06c75; --warn: #e5c07b;
   }
   * { box-sizing: border-box; margin: 0; }
   body { background: var(--bg); color: var(--text); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
@@ -21,10 +21,13 @@
   button { background: var(--accent); color: #10131a; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: .4; cursor: default; }
   button.ghost { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
   #stages { display: flex; gap: 6px; padding: 10px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
   .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
   .chip.active { border-color: var(--accent); color: var(--accent); }
   .chip.done { color: var(--good); border-color: var(--good); }
+  .chip.failed { color: var(--bad); border-color: var(--bad); }
+  #cancel { margin-left: auto; padding: 4px 12px; font-size: 12px; }
   #panes { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); min-height: 0; }
   .pane { background: var(--bg); display: flex; flex-direction: column; min-height: 0; }
   .pane-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); font-weight: 600; }
@@ -40,6 +43,7 @@
   .event.tool { color: var(--muted); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .event.status { color: var(--accent); font-size: 12.5px; }
   .event.error { color: var(--bad); }
+  .event.note { color: var(--warn); border-left-color: var(--warn); }
   #action { border-top: 1px solid var(--border); padding: 12px 20px; display: none; flex-direction: column; gap: 10px; max-height: 40vh; overflow-y: auto; }
   #action.visible { display: flex; }
   #action h2 { font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
@@ -48,6 +52,7 @@
   .verdict { font-weight: 700; }
   .verdict.APPROVE { color: var(--good); }
   .verdict.REQUEST_CHANGES, .verdict.REVIEW_FAILED { color: var(--bad); }
+  .verdict.UNCLEAR, .verdict.UNREVIEWED { color: var(--warn); }
   code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; }
 </style>
 </head>
@@ -65,10 +70,12 @@
 </div>
 <div id="action"></div>
 <script>
-const STAGES = ["generating","critiquing","awaiting_leader","integrating","final_review","awaiting_publish","published"];
-const LABELS = { generating: "1 · Generate", critiquing: "2 · Cross-critique", awaiting_leader: "3 · Pick leader", integrating: "4 · Leader integrates", final_review: "5 · Final review", awaiting_publish: "6 · Publish gate", published: "✓ Published" };
-let current = null;   // run snapshot
+const STAGES = ["generating","critiquing","awaiting_leader","integrating","final_review","awaiting_publish","publishing","published"];
+const LABELS = { generating: "1 · Generate", critiquing: "2 · Cross-critique", awaiting_leader: "3 · Pick leader", integrating: "4 · Leader integrates", final_review: "5 · Final review", awaiting_publish: "6 · Publish gate", publishing: "6 · Publishing…", published: "✓ Published" };
+const ACTIVE_STAGES = new Set(["generating","critiquing","awaiting_leader","integrating","final_review","awaiting_publish"]);
+let current = null;
 let source = null;
+let seen = new Set();
 
 const $ = (id) => document.getElementById(id);
 
@@ -77,6 +84,8 @@ function renderStages() {
   holder.innerHTML = "";
   const activeIndex = current ? STAGES.indexOf(current.stage) : -1;
   STAGES.forEach((stage, index) => {
+    if (stage === "publishing" && (!current || current.stage !== "publishing")) return;
+    if (stage === "awaiting_publish" && current && current.stage === "publishing") return;
     const chip = document.createElement("span");
     chip.className = "chip" + (index === activeIndex ? " active" : index < activeIndex ? " done" : "");
     chip.textContent = LABELS[stage];
@@ -84,20 +93,39 @@ function renderStages() {
   });
   if (current && current.stage === "failed") {
     const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.style.color = "var(--bad)";
-    chip.textContent = "✗ Failed: " + (current.error ?? "unknown");
+    chip.className = "chip failed";
+    chip.textContent = "✗ " + (current.error ?? "failed");
     holder.appendChild(chip);
+  }
+  if (current && ACTIVE_STAGES.has(current.stage)) {
+    const cancel = document.createElement("button");
+    cancel.id = "cancel";
+    cancel.className = "danger";
+    cancel.textContent = "Cancel run";
+    cancel.onclick = () => { cancel.disabled = true; post("/api/runs/" + current.id + "/cancel"); };
+    holder.appendChild(cancel);
   }
 }
 
 function addEvent(actor, kind, text) {
-  if (actor === "system") return;
+  if (actor === "system" && kind === "note") {
+    for (const target of ["claude", "codex"]) {
+      const div = document.createElement("div");
+      div.className = "event note";
+      div.textContent = "◆ " + text;
+      appendToFeed($("feed-" + target), div);
+    }
+    return;
+  }
   const feed = $("feed-" + actor);
   if (!feed) return;
   const div = document.createElement("div");
   div.className = "event " + kind;
   div.textContent = kind === "tool" ? "⚙ " + text : text;
+  appendToFeed(feed, div);
+}
+
+function appendToFeed(feed, div) {
   const pinned = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
   feed.appendChild(div);
   if (pinned) feed.scrollTop = feed.scrollHeight;
@@ -116,6 +144,17 @@ async function post(path, body) {
   return response;
 }
 
+function once(button, action) {
+  button.disabled = true;
+  action().finally(() => { button.disabled = false; });
+}
+
+function verdictLabel() {
+  if (!current) return "";
+  if (current.verdict) return current.verdict;
+  return current.finalReview ? "UNCLEAR" : "UNREVIEWED";
+}
+
 function renderAction() {
   const action = $("action");
   action.className = "";
@@ -123,28 +162,48 @@ function renderAction() {
   if (!current) return;
   if (current.stage === "awaiting_leader") {
     action.className = "visible";
+    const critique = (actor, counterpart, color) => `<div style="flex:1"><strong style="color:var(--${color})">${actor} on ${counterpart}'s code</strong><div class="critique">${escapeHtml(current.critiques[actor.toLowerCase()] ?? "(critique unavailable — this agent's critique turn failed)")}</div></div>`;
     action.innerHTML = `<h2>Both critiques are in — choose which solution leads</h2>
-      <div class="row" style="align-items:stretch">
-        <div style="flex:1"><strong style="color:var(--claude)">Claude on Codex's code</strong><div class="critique">${escapeHtml(current.critiques.claude ?? "")}</div></div>
-        <div style="flex:1"><strong style="color:var(--codex)">Codex on Claude's code</strong><div class="critique">${escapeHtml(current.critiques.codex ?? "")}</div></div>
-      </div>
-      <div class="row">
-        <button onclick="pickLeader('claude')">Lead with Claude</button>
-        <button onclick="pickLeader('codex')">Lead with Codex</button>
+      <div class="row" style="align-items:stretch">${critique("Claude", "Codex", "claude")}${critique("Codex", "Claude", "codex")}</div>
+      <div class="row" id="leader-buttons">
+        <button data-leader="claude">Lead with Claude</button>
+        <button data-leader="codex">Lead with Codex</button>
       </div>`;
+    for (const button of action.querySelectorAll("#leader-buttons button")) {
+      button.onclick = () => {
+        for (const b of action.querySelectorAll("button")) b.disabled = true;
+        post("/api/runs/" + current.id + "/leader", { leader: button.dataset.leader });
+      };
+    }
   } else if (current.stage === "awaiting_publish") {
     action.className = "visible";
-    action.innerHTML = `<h2>Final review verdict: <span class="verdict ${current.verdict ?? ""}">${current.verdict ?? "n/a"}</span> (leader: ${current.leader})</h2>
-      <div class="critique">${escapeHtml(current.finalReview ?? "(no review — sole survivor)")}</div>
-      <div class="row">
-        <button onclick="post('/api/runs/' + current.id + '/publish')">Publish result</button>
-        <button class="ghost" onclick="post('/api/runs/' + current.id + '/revise')" ${current.finalReview ? "" : "disabled"}>Send back for revision</button>
-      </div>`;
+    const verdict = verdictLabel();
+    const soleSurvivor = !current.finalReview && !current.verdict;
+    action.innerHTML = `<h2>Final review verdict: <span class="verdict ${verdict}">${verdict}</span> (leader: ${current.leader})${soleSurvivor ? " — the other agent failed; this result was never peer-reviewed" : ""}</h2>
+      <div class="critique">${escapeHtml(current.finalReview ?? "(no review — the counterpart agent failed during generation)")}</div>
+      <div class="row" id="gate-buttons"></div>`;
+    const row = action.querySelector("#gate-buttons");
+    const add = (label, cls, handler) => {
+      const button = document.createElement("button");
+      button.textContent = label;
+      if (cls) button.className = cls;
+      button.onclick = () => { for (const b of row.querySelectorAll("button")) b.disabled = true; handler(); };
+      row.appendChild(button);
+    };
+    add(verdict === "APPROVE" ? "Publish result" : "Publish anyway", "", () => post("/api/runs/" + current.id + "/publish"));
+    if (current.verdict === "REQUEST_CHANGES" || current.verdict === "UNCLEAR") {
+      add("Send back for revision", "ghost", () => post("/api/runs/" + current.id + "/revise"));
+    }
+    if (current.verdict === "REVIEW_FAILED") {
+      add("Retry final review", "ghost", () => post("/api/runs/" + current.id + "/retry-review"));
+    }
   } else if (current.stage === "published") {
     action.className = "visible";
+    const verdict = current.published.verdict ?? "UNREVIEWED";
     action.innerHTML = `<h2>Published</h2>
-      <div class="row">Result (leader: <strong>${current.published.leader}</strong>, verdict: <span class="verdict ${current.published.verdict ?? ""}">${current.published.verdict ?? "n/a"}</span>) at
-      <code>${escapeHtml(current.published.path)}</code> branch <code>${escapeHtml(current.published.branch)}</code></div>`;
+      <div class="row">Result (leader: <strong>${current.published.leader}</strong>, verdict: <span class="verdict ${verdict}">${verdict}</span>) at
+      <code>${escapeHtml(current.published.path)}</code> branch <code>${escapeHtml(current.published.branch)}</code>
+      ${current.published.seedBranch ? " — also fetched into the seed repo as <code>" + escapeHtml(current.published.seedBranch) + "</code>" : ""}</div>`;
   }
 }
 
@@ -154,15 +213,18 @@ function escapeHtml(value) {
   return div.innerHTML;
 }
 
-function pickLeader(leader) { post("/api/runs/" + current.id + "/leader", { leader }); }
-
 function attach(runId) {
   if (source) source.close();
   $("feed-claude").innerHTML = "";
   $("feed-codex").innerHTML = "";
+  seen = new Set();
   source = new EventSource("/api/runs/" + runId + "/events");
   source.onmessage = (message) => {
     const event = JSON.parse(message.data);
+    if (event.seq !== undefined) {
+      if (seen.has(event.seq)) return;
+      seen.add(event.seq);
+    }
     if (event.kind === "stage") {
       current = JSON.parse(event.text);
       renderStages(); setDots(); renderAction();
@@ -186,7 +248,6 @@ $("run").addEventListener("click", async () => {
   }
 });
 
-// Reattach to the most recent run on refresh.
 fetch("/api/runs").then((r) => r.json()).then((list) => {
   if (list.length > 0) { current = list[0]; renderStages(); setDots(); renderAction(); attach(list[0].id); }
 });
