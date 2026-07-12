@@ -1,0 +1,11 @@
+{
+  "name": "council",
+  "version": "0.1.0",
+  "description": "Two-model council: Claude and Codex independently solve a prompt, cross-critique, converge under a leader, and publish a peer-reviewed result",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": { "node": ">=22.12" }
+}

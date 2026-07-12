@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Council</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8ee;
+    --muted: #8b93a5; --claude: #d97748; --codex: #4fb6a6; --accent: #7aa2f7;
+    --good: #4caf7d; --bad: #e06c75;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 14px 20px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 12px; }
+  header h1 { font-size: 17px; letter-spacing: .3px; }
+  header span { color: var(--muted); font-size: 12.5px; }
+  #prompt-bar { display: flex; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+  #prompt { flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font: inherit; resize: vertical; min-height: 44px; max-height: 160px; }
+  #seed { width: 260px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font: inherit; }
+  button { background: var(--accent); color: #10131a; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.ghost { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  #stages { display: flex; gap: 6px; padding: 10px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+  .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+  .chip.active { border-color: var(--accent); color: var(--accent); }
+  .chip.done { color: var(--good); border-color: var(--good); }
+  #panes { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); min-height: 0; }
+  .pane { background: var(--bg); display: flex; flex-direction: column; min-height: 0; }
+  .pane-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .pane-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pane-head .dot.working { background: var(--accent); animation: pulse 1.2s infinite; }
+  .pane-head .dot.done { background: var(--good); }
+  .pane-head .dot.failed { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .pane[data-actor="claude"] .pane-head { color: var(--claude); }
+  .pane[data-actor="codex"] .pane-head { color: var(--codex); }
+  .feed { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .event { border-left: 2px solid var(--border); padding: 2px 0 2px 10px; white-space: pre-wrap; word-break: break-word; }
+  .event.tool { color: var(--muted); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .event.status { color: var(--accent); font-size: 12.5px; }
+  .event.error { color: var(--bad); }
+  #action { border-top: 1px solid var(--border); padding: 12px 20px; display: none; flex-direction: column; gap: 10px; max-height: 40vh; overflow-y: auto; }
+  #action.visible { display: flex; }
+  #action h2 { font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .critique { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; font-size: 13px; max-height: 22vh; overflow-y: auto; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .verdict { font-weight: 700; }
+  .verdict.APPROVE { color: var(--good); }
+  .verdict.REQUEST_CHANGES, .verdict.REVIEW_FAILED { color: var(--bad); }
+  code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header><h1>Council</h1><span>one prompt &middot; two models &middot; cross-critique &middot; leader integration &middot; peer-reviewed publish</span></header>
+<div id="prompt-bar">
+  <textarea id="prompt" placeholder="Describe what to build. Both models start immediately and independently."></textarea>
+  <input id="seed" placeholder="Optional: path to seed git repo">
+  <button id="run">Run council</button>
+</div>
+<div id="stages"></div>
+<div id="panes">
+  <div class="pane" data-actor="claude"><div class="pane-head"><span class="dot" id="dot-claude"></span>Claude</div><div class="feed" id="feed-claude"></div></div>
+  <div class="pane" data-actor="codex"><div class="pane-head"><span class="dot" id="dot-codex"></span>Codex</div><div class="feed" id="feed-codex"></div></div>
+</div>
+<div id="action"></div>
+<script>
+const STAGES = ["generating","critiquing","awaiting_leader","integrating","final_review","awaiting_publish","published"];
+const LABELS = { generating: "1 · Generate", critiquing: "2 · Cross-critique", awaiting_leader: "3 · Pick leader", integrating: "4 · Leader integrates", final_review: "5 · Final review", awaiting_publish: "6 · Publish gate", published: "✓ Published" };
+let current = null;   // run snapshot
+let source = null;
+
+const $ = (id) => document.getElementById(id);
+
+function renderStages() {
+  const holder = $("stages");
+  holder.innerHTML = "";
+  const activeIndex = current ? STAGES.indexOf(current.stage) : -1;
+  STAGES.forEach((stage, index) => {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (index === activeIndex ? " active" : index < activeIndex ? " done" : "");
+    chip.textContent = LABELS[stage];
+    holder.appendChild(chip);
+  });
+  if (current && current.stage === "failed") {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.style.color = "var(--bad)";
+    chip.textContent = "✗ Failed: " + (current.error ?? "unknown");
+    holder.appendChild(chip);
+  }
+}
+
+function addEvent(actor, kind, text) {
+  if (actor === "system") return;
+  const feed = $("feed-" + actor);
+  if (!feed) return;
+  const div = document.createElement("div");
+  div.className = "event " + kind;
+  div.textContent = kind === "tool" ? "⚙ " + text : text;
+  const pinned = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+  feed.appendChild(div);
+  if (pinned) feed.scrollTop = feed.scrollHeight;
+}
+
+function setDots() {
+  if (!current) return;
+  for (const actor of ["claude", "codex"]) {
+    $("dot-" + actor).className = "dot " + (current.actorStatus?.[actor] ?? "idle");
+  }
+}
+
+async function post(path, body) {
+  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  if (!response.ok) alert((await response.json()).error ?? "request failed");
+  return response;
+}
+
+function renderAction() {
+  const action = $("action");
+  action.className = "";
+  action.innerHTML = "";
+  if (!current) return;
+  if (current.stage === "awaiting_leader") {
+    action.className = "visible";
+    action.innerHTML = `<h2>Both critiques are in — choose which solution leads</h2>
+      <div class="row" style="align-items:stretch">
+        <div style="flex:1"><strong style="color:var(--claude)">Claude on Codex's code</strong><div class="critique">${escapeHtml(current.critiques.claude ?? "")}</div></div>
+        <div style="flex:1"><strong style="color:var(--codex)">Codex on Claude's code</strong><div class="critique">${escapeHtml(current.critiques.codex ?? "")}</div></div>
+      </div>
+      <div class="row">
+        <button onclick="pickLeader('claude')">Lead with Claude</button>
+        <button onclick="pickLeader('codex')">Lead with Codex</button>
+      </div>`;
+  } else if (current.stage === "awaiting_publish") {
+    action.className = "visible";
+    action.innerHTML = `<h2>Final review verdict: <span class="verdict ${current.verdict ?? ""}">${current.verdict ?? "n/a"}</span> (leader: ${current.leader})</h2>
+      <div class="critique">${escapeHtml(current.finalReview ?? "(no review — sole survivor)")}</div>
+      <div class="row">
+        <button onclick="post('/api/runs/' + current.id + '/publish')">Publish result</button>
+        <button class="ghost" onclick="post('/api/runs/' + current.id + '/revise')" ${current.finalReview ? "" : "disabled"}>Send back for revision</button>
+      </div>`;
+  } else if (current.stage === "published") {
+    action.className = "visible";
+    action.innerHTML = `<h2>Published</h2>
+      <div class="row">Result (leader: <strong>${current.published.leader}</strong>, verdict: <span class="verdict ${current.published.verdict ?? ""}">${current.published.verdict ?? "n/a"}</span>) at
+      <code>${escapeHtml(current.published.path)}</code> branch <code>${escapeHtml(current.published.branch)}</code></div>`;
+  }
+}
+
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value ?? "";
+  return div.innerHTML;
+}
+
+function pickLeader(leader) { post("/api/runs/" + current.id + "/leader", { leader }); }
+
+function attach(runId) {
+  if (source) source.close();
+  $("feed-claude").innerHTML = "";
+  $("feed-codex").innerHTML = "";
+  source = new EventSource("/api/runs/" + runId + "/events");
+  source.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (event.kind === "stage") {
+      current = JSON.parse(event.text);
+      renderStages(); setDots(); renderAction();
+      return;
+    }
+    addEvent(event.actor, event.kind, event.text);
+    setDots();
+  };
+}
+
+$("run").addEventListener("click", async () => {
+  const prompt = $("prompt").value.trim();
+  if (!prompt) return;
+  $("run").disabled = true;
+  try {
+    const response = await post("/api/runs", { prompt, seedRepo: $("seed").value.trim() || undefined });
+    const run = await response.json();
+    if (run.id) { current = run; renderStages(); attach(run.id); }
+  } finally {
+    $("run").disabled = false;
+  }
+});
+
+// Reattach to the most recent run on refresh.
+fetch("/api/runs").then((r) => r.json()).then((list) => {
+  if (list.length > 0) { current = list[0]; renderStages(); setDots(); renderAction(); attach(list[0].id); }
+});
+renderStages();
+</script>
+</body>
+</html>
