@@ -57,7 +57,9 @@
 </style>
 </head>
 <body>
-<header><h1>Council</h1><span>one prompt &middot; two models &middot; cross-critique &middot; leader integration &middot; peer-reviewed publish</span></header>
+<header><h1>Council</h1><span>one prompt &middot; two models &middot; cross-critique &middot; leader integration &middot; peer-reviewed publish</span>
+  <select id="runpicker" style="margin-left:auto;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:inherit;max-width:420px"></select>
+</header>
 <div id="prompt-bar">
   <textarea id="prompt" placeholder="Describe what to build. Both models start immediately and independently."></textarea>
   <input id="seed" placeholder="Optional: path to seed git repo">
@@ -76,8 +78,36 @@ const ACTIVE_STAGES = new Set(["generating","critiquing","awaiting_leader","inte
 let current = null;
 let source = null;
 let seen = new Set();
+let runList = [];
+const ACTIVE = new Set(["generating","critiquing","awaiting_leader","integrating","final_review","awaiting_publish","publishing"]);
 
 const $ = (id) => document.getElementById(id);
+
+async function loadRuns() {
+  runList = await fetch("/api/runs").then((r) => r.json());
+  const picker = $("runpicker");
+  picker.innerHTML = "";
+  for (const run of runList) {
+    const option = document.createElement("option");
+    option.value = run.id;
+    const mark = ACTIVE.has(run.stage) ? "● " : run.stage === "published" ? "✓ " : "✗ ";
+    option.textContent = `${mark}${run.stage} · ${(run.prompt ?? "").slice(0, 44)}`;
+    picker.appendChild(option);
+  }
+  return runList;
+}
+
+function switchTo(runId) {
+  const run = runList.find((r) => r.id === runId);
+  if (!run) return;
+  current = run;
+  $("runpicker").value = runId;
+  renderStages(); setDots(); renderAction(); attach(runId);
+}
+
+document.addEventListener("change", (event) => {
+  if (event.target.id === "runpicker") switchTo(event.target.value);
+});
 
 function renderStages() {
   const holder = $("stages");
@@ -245,14 +275,18 @@ $("run").addEventListener("click", async () => {
   try {
     const response = await post("/api/runs", { prompt, seedRepo: $("seed").value.trim() || undefined });
     const run = await response.json();
-    if (run.id) { current = run; renderStages(); attach(run.id); }
+    if (run.id) { await loadRuns(); switchTo(run.id); }
   } finally {
     $("run").disabled = false;
   }
 });
 
-fetch("/api/runs").then((r) => r.json()).then((list) => {
-  if (list.length > 0) { current = list[0]; renderStages(); setDots(); renderAction(); attach(list[0].id); }
+loadRuns().then((list) => {
+  if (list.length === 0) return;
+  // Prefer the newest still-active run so a finished side-run never hides the
+  // one the user is actually waiting on.
+  const active = list.find((r) => ACTIVE.has(r.stage));
+  switchTo((active ?? list[0]).id);
 });
 renderStages();
 </script>
