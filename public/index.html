@@ -227,6 +227,9 @@ function renderAction() {
     if (current.verdict === "REVIEW_FAILED") {
       add("Retry final review", "ghost", () => post("/api/runs/" + current.id + "/retry-review"));
     }
+    if (soleSurvivor) {
+      add("Request counterpart review", "ghost", () => post("/api/runs/" + current.id + "/retry-review"));
+    }
   } else if (current.stage === "published") {
     action.className = "visible";
     const verdict = current.published.verdict ?? "UNREVIEWED";
