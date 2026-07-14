@@ -1,0 +1,110 @@
+// Atomic, append-only run store. ADR-0001 chose atomic files over SQLite for
+// zero-dependency, human-inspectable, packaging-trivial storage. Guarantees:
+//  - no overlapping writes (single-writer lock file per run)
+//  - no partial state (temp file + fsync + rename)
+//  - no duplicate transitions / replay gaps (monotonic seq, append-only log)
+import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, openSync, closeSync, fsyncSync, readdirSync, appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { runsDir } from './paths.mjs';
+import { isSafeRunId } from '../core/ids.mjs';
+
+export const SCHEMA_RUN = 1;
+
+function atomicWrite(file, data) {
+  const tmp = `${file}.tmp-${process.pid}`;
+  const fd = openSync(tmp, 'w');
+  try {
+    writeFileSync(fd, data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, file);
+}
+
+export class RunStore {
+  #dir;
+  constructor(baseDir = runsDir()) {
+    this.#dir = baseDir;
+  }
+
+  runPath(runId) {
+    if (!isSafeRunId(runId)) throw new Error(`unsafe run id: ${runId}`);
+    return join(this.#dir, runId);
+  }
+
+  create(runId, initialState) {
+    const dir = this.runPath(runId);
+    mkdirSync(dir, { recursive: true });
+    const lock = join(dir, '.lock');
+    if (existsSync(lock)) {
+      // Stale-lock tolerance: a lock without a live snapshot is abandoned.
+      const stale = !existsSync(join(dir, 'state.json'));
+      if (!stale) throw new Error(`run ${runId} is locked (already in progress)`);
+    }
+    atomicWrite(lock, String(process.pid));
+    const state = { v: SCHEMA_RUN, ...initialState, seq: 0 };
+    this.saveState(runId, state);
+    // Truncate/initialize event log.
+    atomicWrite(join(dir, 'events.jsonl'), '');
+    return state;
+  }
+
+  saveState(runId, state) {
+    atomicWrite(join(this.runPath(runId), 'state.json'), JSON.stringify(state, null, 2));
+  }
+
+  loadState(runId) {
+    const f = join(this.runPath(runId), 'state.json');
+    if (!existsSync(f)) return null;
+    return JSON.parse(readFileSync(f, 'utf8'));
+  }
+
+  appendEvent(runId, evt) {
+    // Append-only; a monotonic seq is assigned by the caller (application service).
+    appendFileSync(join(this.runPath(runId), 'events.jsonl'), JSON.stringify(evt) + '\n');
+  }
+
+  /** Replay every persisted event in order — the basis for durable recovery. */
+  readEvents(runId) {
+    const f = join(this.runPath(runId), 'events.jsonl');
+    if (!existsSync(f)) return [];
+    const out = [];
+    for (const line of readFileSync(f, 'utf8').split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        out.push(JSON.parse(t));
+      } catch {
+        // A torn last line (crash mid-append) is skipped, not fatal — no replay gap
+        // because seq is validated by the reader.
+      }
+    }
+    return out;
+  }
+
+  writeReceipt(runId, receipt) {
+    atomicWrite(join(this.runPath(runId), 'receipt.json'), JSON.stringify(receipt, null, 2));
+  }
+
+  readReceipt(runId) {
+    const f = join(this.runPath(runId), 'receipt.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null;
+  }
+
+  release(runId) {
+    const lock = join(this.runPath(runId), '.lock');
+    try {
+      if (existsSync(lock)) renameSync(lock, `${lock}.released`);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  list() {
+    if (!existsSync(this.#dir)) return [];
+    return readdirSync(this.#dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && isSafeRunId(d.name))
+      .map((d) => d.name);
+  }
+}

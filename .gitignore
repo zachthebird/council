@@ -1,0 +1,16 @@
+# Runtime/user data — never committed, never packaged.
+runs/
+workspaces/
+*.log
+*.tmp
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Local state that may accumulate during development
+.moh-state/
+.moh-config/
+coverage/
+*.tgz

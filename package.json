@@ -1,0 +1,59 @@
+{
+  "name": "mixture-of-harnesses",
+  "version": "0.1.0",
+  "description": "One task. Multiple harnesses. Better code. A local-first TUI/web app that runs two independently configured coding harnesses against one task, has them critique each other, synthesizes and reviews the result, and creates a traceable local Git result.",
+  "keywords": [
+    "coding-agent",
+    "harness",
+    "claude-code",
+    "codex",
+    "tui",
+    "local-first",
+    "code-review",
+    "orchestration"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "moh": "bin/moh.mjs"
+  },
+  "exports": {
+    ".": "./src/core/index.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "moh": "node bin/moh.mjs",
+    "test": "node --test test/",
+    "test:unit": "node --test test/unit*.test.mjs",
+    "check": "node --check bin/moh.mjs && node scripts/check-syntax.mjs",
+    "lint": "node scripts/check-syntax.mjs",
+    "demo": "node bin/moh.mjs demo",
+    "doctor": "node bin/moh.mjs doctor",
+    "audit": "npm audit --omit=dev || true",
+    "prepublishOnly": "node scripts/prepublish.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "docs/ADAPTERS.md",
+    "docs/PROTOCOL.md",
+    "examples/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "PRIVACY.md"
+  ],
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/mixture-of-harnesses.git"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}

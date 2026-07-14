@@ -1,0 +1,67 @@
+name: CI
+
+# CI never calls a real model and never requires credentials — all tests use the
+# deterministic fake harness and temporary repositories.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Portable core is exercised on all three; native harness support is only
+        # claimed for macOS and Linux.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['22.12', '22.x']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install (no dependencies)
+        run: npm ci || npm install
+      - name: Syntax check
+        run: npm run check
+      - name: Unit + integration tests
+        run: node --test "test/*.test.mjs"
+      - name: Demo smoke (zero tokens)
+        run: node bin/moh.mjs demo
+      - name: Doctor (offline)
+        run: node bin/moh.mjs doctor --json
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Pack
+        run: npm pack
+      - name: Clean-install tarball and smoke test
+        run: |
+          TARBALL=$(ls mixture-of-harnesses-*.tgz)
+          TMP=$(mktemp -d)
+          cp "$TARBALL" "$TMP/"
+          cd "$TMP"
+          npm init -y >/dev/null 2>&1
+          npm install "./$TARBALL"
+          ./node_modules/.bin/moh --help
+          ./node_modules/.bin/moh doctor --json >/dev/null
+          ./node_modules/.bin/moh demo >/dev/null
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Dependency audit
+        run: npm audit --omit=dev || true
+      - name: Secret scan (basic)
+        run: node scripts/secret-scan.mjs

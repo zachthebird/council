@@ -1,0 +1,16 @@
+{
+  "protocol": 1,
+  "id": "example-external",
+  "displayName": "Example External Adapter",
+  "version": "1.0.0",
+  "executable": "./adapter.mjs",
+  "argv": [],
+  "trustLevel": "third_party",
+  "authEnvNames": [],
+  "capabilities": {
+    "structured_streaming": "supported",
+    "runtime_model_observation": "supported",
+    "explicit_model_selection": "supported",
+    "workspace_isolation": "supported"
+  }
+}
