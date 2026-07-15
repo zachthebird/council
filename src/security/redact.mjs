@@ -78,12 +78,35 @@ export function redactDeep(value, seen = new WeakSet()) {
  * Strip a URL of embedded credentials, returning a safe form. Throws if the URL
  * carries credentials and `reject` is set (used at persistence boundaries).
  */
+const CRED_QUERY_KEYS = /^(token|access_token|private_token|api[_-]?key|key|password|passwd|pwd|secret|auth|oauth_token|x-oauth-basic)$/i;
+
 export function sanitizeGitUrl(url, { reject = false } = {}) {
   if (typeof url !== 'string') throw new Error('url must be a string');
+
+  // 1) userinfo credentials: scheme://user:pass@host
   const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+@)/i.exec(url);
   if (m) {
     if (reject) throw new Error('refusing credential-bearing clone URL; use harness/OS credential storage instead');
-    return url.replace(m[2], '');
+    url = url.replace(m[2], '');
+  }
+
+  // 2) token-bearing query parameters: ?token=..., ?access_token=..., etc.
+  try {
+    const u = new URL(url);
+    let hadCredParam = false;
+    for (const key of [...u.searchParams.keys()]) {
+      if (CRED_QUERY_KEYS.test(key)) {
+        hadCredParam = true;
+        u.searchParams.delete(key);
+      }
+    }
+    if (hadCredParam) {
+      if (reject) throw new Error('refusing clone URL with a credential-bearing query parameter; use harness/OS credential storage instead');
+      url = u.toString();
+    }
+  } catch (e) {
+    // Non-absolute/opaque URLs (e.g. scp-like git@host:path) have no query to parse.
+    if (e instanceof Error && /credential-bearing query/.test(e.message)) throw e;
   }
   return url;
 }

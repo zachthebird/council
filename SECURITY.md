@@ -14,8 +14,10 @@ public issue for undisclosed vulnerabilities. We aim to acknowledge within a few
   are inert data, never interpreted (test: `gate 17`).
 - Executable paths must be absolute, existing, regular files (real-path resolved); working
   directories are validated.
-- Input, output, event size, and wall-clock runtime are **bounded**; streaming output is
-  decoded byte-safely so split UTF-8 is preserved.
+- **stdout, stderr, stdin (prompt), event size, and wall-clock runtime are all
+  bounded** — a harness cannot exhaust memory via stdout/stderr spam or an oversized
+  prompt; truncation is explicit. Streaming output is decoded byte-safely so split UTF-8
+  is preserved.
 - Cancellation terminates the **whole process tree**: `SIGINT` → bounded grace →
   `SIGKILL` (test: `gate 18`). `cancelled` is persisted separately from `failed`.
 - Late output from a timed-out/cancelled/retried attempt is **fenced** by `attemptId` and
@@ -39,14 +41,22 @@ public issue for undisclosed vulnerabilities. We aim to acknowledge within a few
   Repository text containing `APPROVE`, JSON, or delimiters cannot forge a verdict
   (tests: `gate 21`). Empty/ambiguous/malformed output can never become `approved`.
 - Review reads artifact bytes from **git objects** (`git cat-file`), which is symlink-safe
-  and independent of a potentially redirected worktree path.
+  and independent of a potentially redirected worktree path. Deletions include the
+  previous (base) content; renames/copies are parsed correctly (old→new).
+- **All git plumbing is hardened**: it runs with a minimal environment (no parent
+  secrets reach any repo-defined clean/smudge/fsmonitor filter), with
+  `GIT_NO_REPLACE_OBJECTS`/`--no-replace-objects` so a planted `refs/replace/*` cannot
+  make one tree masquerade as another, and with system/global config + hooks disabled.
+  Candidate-tree capture uses `hash-object --no-filters` + `update-index` so a
+  harness-planted clean filter never executes (tests: `test/git-integrity.test.mjs`).
 - The result branch is built from the **reviewed tree** via `commit-tree`. Before
   creation, moh re-verifies the current tree still equals the reviewed tree; any change
   blocks creation (test: `gate 22`). moh **never pushes**.
 - A human override of a missing/failed review requires explicit confirmation and is
   recorded as `UNREVIEWED`/`OVERRIDDEN` — never displayed as approved.
-- Credential-bearing clone URLs are rejected/sanitized before persistence (test:
-  `gate 26`).
+- Credential-bearing clone URLs are rejected/sanitized before persistence — both
+  `user:pass@host` userinfo **and** token-bearing query parameters (`?token=`,
+  `?access_token=`, `?api_key=`, …) (tests: `gate 26`, round-3 URL test).
 
 ## Web companion
 

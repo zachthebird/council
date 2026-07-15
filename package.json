@@ -36,8 +36,11 @@
   "files": [
     "bin/",
     "src/",
+    "server.mjs",
     "docs/ADAPTERS.md",
     "docs/PROTOCOL.md",
+    "docs/MIGRATION.md",
+    "docs/TROUBLESHOOTING.md",
     "examples/",
     "README.md",
     "LICENSE",
@@ -49,10 +52,10 @@
   "devDependencies": {},
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/mixture-of-harnesses.git"
+    "url": "git+https://github.com/zachthebird/mixture-of-harnesses.git"
   },
-  "os": [
-    "darwin",
-    "linux"
-  ]
+  "homepage": "https://github.com/zachthebird/mixture-of-harnesses#readme",
+  "bugs": {
+    "url": "https://github.com/zachthebird/mixture-of-harnesses/issues"
+  }
 }

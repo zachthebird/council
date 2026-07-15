@@ -12,6 +12,8 @@ import { platform } from 'node:os';
 
 export const DEFAULT_LIMITS = Object.freeze({
   maxOutputBytes: 8 * 1024 * 1024,
+  maxStderrBytes: 2 * 1024 * 1024,
+  maxStdinBytes: 4 * 1024 * 1024,
   timeoutMs: 10 * 60 * 1000,
   killGraceMs: 4000,
 });
@@ -49,6 +51,17 @@ export function runProcess({ executable, argv = [], env, cwd, stdin = null, onSt
   validateCwd(cwd);
   const lim = { ...DEFAULT_LIMITS, ...limits };
 
+  // Bound the prompt fed on stdin so an over-large prompt cannot exhaust memory or
+  // hang the child. Truncation is explicit (recorded on the returned result).
+  let stdinTruncated = false;
+  if (stdin != null) {
+    const buf = Buffer.from(String(stdin), 'utf8');
+    if (buf.length > lim.maxStdinBytes) {
+      stdin = buf.subarray(0, lim.maxStdinBytes).toString('utf8');
+      stdinTruncated = true;
+    }
+  }
+
   const child = spawn(executable, argv, {
     cwd,
     env,
@@ -61,11 +74,12 @@ export function runProcess({ executable, argv = [], env, cwd, stdin = null, onSt
   const outDec = new StringDecoder('utf8');
   const errDec = new StringDecoder('utf8');
   let outBytes = 0;
+  let errBytes = 0;
   let killedForSize = false;
   let cancelled = false;
   let timedOut = false;
 
-  const bound = (bytes) => {
+  const boundOut = (bytes) => {
     outBytes += bytes;
     if (outBytes > lim.maxOutputBytes && !killedForSize) {
       killedForSize = true;
@@ -74,11 +88,18 @@ export function runProcess({ executable, argv = [], env, cwd, stdin = null, onSt
   };
 
   child.stdout.on('data', (buf) => {
-    bound(buf.length);
+    boundOut(buf.length);
     const s = outDec.write(buf);
     if (s && onStdout) onStdout(s);
   });
   child.stderr.on('data', (buf) => {
+    // stderr is ALSO bounded — a harness cannot exhaust memory via stderr spam.
+    errBytes += buf.length;
+    if (errBytes > lim.maxStderrBytes && !killedForSize) {
+      killedForSize = true;
+      kill('SIGKILL');
+      return;
+    }
     const s = errDec.write(buf);
     if (s && onStderr) onStderr(s);
   });
@@ -127,7 +148,7 @@ export function runProcess({ executable, argv = [], env, cwd, stdin = null, onSt
       else if (killedForSize) status = 'failed';
       else if (code === 0) status = 'ok';
       else status = 'failed';
-      resolve({ status, code, signal, cancelled, timedOut, killedForSize });
+      resolve({ status, code, signal, cancelled, timedOut, killedForSize, stdinTruncated, outBytes, errBytes });
     });
   });
 

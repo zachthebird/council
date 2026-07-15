@@ -5,9 +5,22 @@ import { writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { RunStore } from '../storage/store.mjs';
 import { parseFlags } from './args.mjs';
-import { redactDeep } from '../security/redact.mjs';
+import { redactDeep, stripControl } from '../security/redact.mjs';
 import { effectiveModelLine, identityLine } from '../core/provenance.mjs';
 import { out, err, c } from './ui.mjs';
+
+/** Scrub absolute harness paths from a receipt (default privacy-safe export). */
+function sanitizeReceipt(receipt) {
+  const r = redactDeep(structuredClone(receipt));
+  for (const s of r.seats || []) {
+    if (s.provenance?.harnessPath) s.provenance.harnessPath = basename(s.provenance.harnessPath);
+  }
+  return r;
+}
+/** Neutralize control chars / markdown-breaking content in a rendered value. */
+function md(v) {
+  return stripControl(String(v ?? '')).replace(/[\r\n]+/g, ' ');
+}
 
 /** Strip absolute paths to basenames; drop prompts and raw content. */
 function sanitizeState(state) {
@@ -47,40 +60,43 @@ export async function exportRun(rest) {
   if (includeContent) out(c.yellow('WARNING: --include-content will embed repository/prompt content. Preview before sharing.'));
 
   const safeState = includeContent ? state : sanitizeState(state);
+  const safeReceipt = receipt ? (includeContent ? redactDeep(receipt) : sanitizeReceipt(receipt)) : null;
 
   if (format === 'json') {
-    const doc = { runId, state: safeState, receipt: receipt ? redactDeep(receipt) : null, exportedWithContent: includeContent };
+    const doc = { runId, state: safeState, receipt: safeReceipt, exportedWithContent: includeContent };
     const text = JSON.stringify(doc, null, 2);
     return emit(flags, runId, 'json', text);
   }
 
+  // Markdown renders from the SANITIZED state, and every interpolated value is passed
+  // through md() (control-char + newline stripped) to prevent markdown/terminal injection.
   const lines = [];
   lines.push(`# Mixture of Harnesses — Run Report`);
   lines.push('');
-  lines.push(`- Run: \`${runId}\``);
-  lines.push(`- Preset: ${state.preset}`);
-  lines.push(`- Status: ${state.status}`);
-  lines.push(`- Leader: ${state.leaderSeatId || '—'}`);
-  lines.push(`- Review verdict: ${state.review?.verdict || '—'}  (integrity: ${state.reviewIntegrity})`);
+  lines.push(`- Run: \`${md(runId)}\``);
+  lines.push(`- Preset: ${md(safeState.preset)}`);
+  lines.push(`- Status: ${md(safeState.status)}`);
+  lines.push(`- Leader: ${md(safeState.leaderSeatId || '—')}`);
+  lines.push(`- Review verdict: ${md(safeState.review?.verdict || '—')}  (integrity: ${md(safeState.reviewIntegrity)})`);
   lines.push('');
   lines.push('## Seats & model provenance');
-  for (const seat of state.seats) {
-    const prov = state.provenanceBySeat?.[seat.seatId];
-    lines.push(`### ${seat.label} (${seat.adapterId})`);
+  for (const seat of safeState.seats) {
+    const prov = safeState.provenanceBySeat?.[seat.seatId];
+    lines.push(`### ${md(seat.label)} (${md(seat.adapterId)})`);
     if (prov) {
-      lines.push('- ' + identityLine(prov));
-      lines.push('- ' + effectiveModelLine(prov));
-      lines.push(`- Requested: ${prov.requestedModel || 'Harness default'} · evidence state: ${prov.state}`);
-      if (prov.history?.length) lines.push(`- Model fallback history: ${prov.history.map((h) => `${h.from}→${h.to}`).join(', ')}`);
+      lines.push('- ' + md(identityLine(prov)));
+      lines.push('- ' + md(effectiveModelLine(prov)));
+      lines.push(`- Requested: ${md(prov.requestedModel || 'Harness default')} · evidence state: ${md(prov.state)}`);
+      if (prov.history?.length) lines.push(`- Model fallback history: ${md(prov.history.map((h) => `${h.from}→${h.to}`).join(', '))}`);
     } else {
       lines.push('- (no provenance recorded)');
     }
     lines.push('');
   }
-  if (receipt) {
+  if (safeReceipt) {
     lines.push('## Result receipt');
     lines.push('```json');
-    lines.push(JSON.stringify({ git: receipt.git, receiptDigest: receipt.receiptDigest, changed: receipt.changedManifest.length, reviewIntegrity: receipt.reviewIntegrity }, null, 2));
+    lines.push(JSON.stringify({ git: safeReceipt.git, receiptDigest: safeReceipt.receiptDigest, changed: (safeReceipt.changedManifest || []).length, reviewIntegrity: safeReceipt.reviewIntegrity }, null, 2));
     lines.push('```');
   }
   lines.push('');

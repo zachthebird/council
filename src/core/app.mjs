@@ -38,7 +38,8 @@ export class Application {
     this.deterministic = deterministic;
     this.decider = decider;
     this.workspacesRoot = workspacesRoot;
-    this._seq = 0;
+    this._seqByRun = new Map(); // per-run monotonic sequence
+    this._finishedRuns = new Set(); // runs whose RUN_FINISHED was already emitted
     this._cancelled = false;
   }
 
@@ -52,13 +53,19 @@ export class Application {
   }
 
   _emit(runId, partial) {
-    this._seq += 1;
+    // Fence: once a run has finished, no further event may be persisted (late
+    // adapter callbacks are dropped). RUN_FINISHED itself is allowed through once.
+    const isFinish = partial.kind === EventKind.RUN_FINISHED;
+    if (this._finishedRuns.has(runId) && !isFinish) return null;
+    const seq = (this._seqByRun.get(runId) || 0) + 1; // PER-RUN monotonic sequence
+    this._seqByRun.set(runId, seq);
     const ts = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
     // Redact secret-shaped values and secret-named keys from EVERY event before it
     // is persisted or broadcast (covers text, notices, model metadata, errors).
-    const evt = redactDeep(makeEvent({ seq: this._seq, runId, ts, ...partial }));
+    const evt = redactDeep(makeEvent({ seq, runId, ts, ...partial }));
     this.store.appendEvent(runId, evt);
     this.bus.emit(evt);
+    if (isFinish) this._finishedRuns.add(runId);
     return evt;
   }
 
@@ -141,7 +148,7 @@ export class Application {
 
   _saveStage(state, stage) {
     state.stage = stage;
-    state.seq = this._seq;
+    state.seq = this._seqByRun.get(state.runId) || 0;
     this.store.saveState(state.runId, state);
     this._emit(state.runId, { kind: EventKind.STAGE_ENTERED, stage, payload: { stage } });
   }
@@ -208,8 +215,10 @@ export class Application {
       signal: abort.signal,
     };
 
+    let turnDone = false; // set once runTurn resolves; fences straggler callbacks
     const onEvent = (ev) => {
-      if (abort.signal.aborted) return; // fence late output from superseded attempts
+      // Fence late/straggler output from a completed, superseded, or cancelled attempt.
+      if (turnDone || abort.signal.aborted) return;
       if (ev.kind === 'text') {
         // Neutralize terminal control sequences from untrusted harness output.
         this._emit(state.runId, { kind: EventKind.SEAT_OUTPUT, stage: state.stage, seatId: seat.seatId, attemptId, turnId, payload: { text: stripControl(ev.payload.text) } });
@@ -232,11 +241,13 @@ export class Application {
     try {
       result = await adapter.runTurn(ctx, { onEvent });
     } catch (e) {
+      turnDone = true;
       prov.endedAt = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
       prov.exitStatus = 'error';
       this._emit(state.runId, { kind: EventKind.SEAT_TURN_FAILED, stage: state.stage, seatId: seat.seatId, attemptId, turnId, payload: { code: 'adapter_error', message: e.message }, provenance: prov });
       return { status: 'failed', finalText: '', sessionId: null, provenance: prov, attemptId };
     }
+    turnDone = true; // no further onEvent callbacks may advance state after this point
 
     prov.endedAt = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
     prov.sessionId = result.sessionId || prov.sessionId;
@@ -321,11 +332,22 @@ export class Application {
 
     // --- CRITIQUE (full mixture only, and only with two survivors) ---
     const critique = {};
+    let critiqueFailed = false;
     if (hasIntegration(state.preset) && !soleSurvivor) {
       this._saveStage(state, Stage.CRITIQUE);
       critique[seatA.seatId] = await this._seatTurn(state, seatA, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatB.seatId].finalText, otherDiff: seatDiff[seatB.seatId] }) });
       critique[seatB.seatId] = await this._seatTurn(state, seatB, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatA.seatId].finalText, otherDiff: seatDiff[seatA.seatId] }) });
-      this._emit(state.runId, { kind: EventKind.CRITIQUE_READY, stage: Stage.CRITIQUE, payload: { seats: Object.keys(critique) } });
+      const okCount = Object.values(critique).filter((c) => c.status === 'ok').length;
+      // A required cross-critique that did not complete must not silently pass. If
+      // BOTH critiques failed, the mixture's peer-review step did not happen -> the
+      // result cannot be cleanly approved. Only signal readiness when both succeed.
+      if (okCount === Object.keys(critique).length) {
+        this._emit(state.runId, { kind: EventKind.CRITIQUE_READY, stage: Stage.CRITIQUE, payload: { seats: Object.keys(critique) } });
+      } else {
+        state.critiqueDegraded = true;
+        this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.CRITIQUE, payload: { level: 'warn', code: 'critique_incomplete', message: `${Object.keys(critique).length - okCount} critique turn(s) failed` } });
+        if (okCount === 0) critiqueFailed = true;
+      }
     }
 
     // --- LEADER SELECTION (gate) ---
@@ -379,9 +401,17 @@ export class Application {
 
     // --- REVISE (at most MAX_REVISIONS) then re-review ---
     let revisions = 0;
+    let revisionFailed = false;
     while (review && review.verdict === Verdict.REVISE && revisions < MAX_REVISIONS && stages.includes(Stage.REVISE)) {
       this._saveStage(state, Stage.REVISE);
-      await this._seatTurn(state, leader, 'revise', { workspaceDir: leaderDir, prompt: P.revisionPrompt({ task: state.task, review }) });
+      const rev = await this._seatTurn(state, leader, 'revise', { workspaceDir: leaderDir, prompt: P.revisionPrompt({ task: state.task, review }) });
+      // A failed revision must not be treated as a completed one. Do not emit
+      // revision.ready, do not re-review a non-revision, and block clean approval.
+      if (rev.status !== 'ok') {
+        revisionFailed = true;
+        this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.REVISE, payload: { level: 'error', code: 'revision_failed', message: `revision turn ${rev.status}; result cannot be cleanly approved` } });
+        break;
+      }
       this._emit(state.runId, { kind: EventKind.REVISION_READY, stage: Stage.REVISE, payload: {} });
       state.candidateTreeOid = captureTree(leaderDir);
       review = await this._reviewCandidate(state, leader, leaderDir);
@@ -401,8 +431,9 @@ export class Application {
     // A sole-survivor run never yields a clean "approve": the cross-critique mixture
     // did not occur. The reviewer's findings are preserved in state.review.
     if (soleSurvivor) verdict = Verdict.UNREVIEWED;
-    // A failed integration can never finish as approved.
-    if (integrationFailed) verdict = Verdict.UNREVIEWED;
+    // A failed required turn (integration, both critiques, or a revision) can never
+    // finish as a clean approval.
+    if (integrationFailed || critiqueFailed || revisionFailed) verdict = Verdict.UNREVIEWED;
     // An approve that is not attested (unread evidence, or verdict not bound to git
     // objects) must not pass the gate as approved.
     if (isApproved(verdict) && review && !review.attested) verdict = Verdict.UNREVIEWED;

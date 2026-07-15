@@ -1,14 +1,15 @@
 // CLI dispatcher. One core; every command drives the same Application.
 import { mkdirSync } from 'node:fs';
+import { resolve as resolvePath, basename } from 'node:path';
 import { Application, autoDecider } from '../core/app.mjs';
 import { RunStore } from '../storage/store.mjs';
-import { listAdapters, getAdapter } from '../adapters/registry.mjs';
+import { listAdapters, getAdapter, registerExternalAdapter } from '../adapters/registry.mjs';
 import { Readiness } from '../adapters/contract.mjs';
 import { Preset } from '../core/state.mjs';
 import { identityLine, effectiveModelLine } from '../core/provenance.mjs';
 import { runsDir, stateDir, legacyCouncilDirs } from '../storage/paths.mjs';
 import { applyLegacyEnvCompat, scanLegacyCouncil, migrateCouncilRun } from '../storage/migrate.mjs';
-import { loadConfig, configExists } from '../tui/config.mjs';
+import { loadConfig, configExists, saveConfig } from '../tui/config.mjs';
 import { out, err, heading, kv, table, c } from './ui.mjs';
 import { readPromptInput, parseFlags } from './args.mjs';
 import { doctor } from './doctor.mjs';
@@ -20,8 +21,27 @@ function ensureDirs() {
   mkdirSync(runsDir(), { recursive: true });
 }
 
+/**
+ * Load third-party adapters listed in config (opt-in). Enabling one means trusting
+ * local code; each requires MOH_ALLOW_EXTERNAL_ADAPTERS=1 or config.trustExternal.
+ */
+function loadConfiguredExternalAdapters() {
+  const cfg = configExists() ? loadConfig() : null;
+  const manifests = cfg?.externalAdapters || [];
+  if (!manifests.length) return;
+  const trust = process.env.MOH_ALLOW_EXTERNAL_ADAPTERS === '1' || cfg?.trustExternal === true;
+  for (const m of manifests) {
+    try {
+      registerExternalAdapter(m, { trust });
+    } catch (e) {
+      err(c.yellow(`[external-adapter] skipped ${m}: ${e.message}`));
+    }
+  }
+}
+
 export async function main(argv) {
   applyLegacyEnvCompat((m) => err(c.yellow(m)));
+  loadConfiguredExternalAdapters();
   const [cmd, ...rest] = argv;
 
   switch (cmd) {
@@ -125,6 +145,29 @@ async function cmdDoctor(rest) {
 
 async function cmdAdapters(rest) {
   const flags = parseFlags(rest);
+  // `moh adapters add <manifest.json>` registers a third-party adapter (opt-in).
+  if (rest[0] === 'add') {
+    const manifest = rest.find((a, i) => i > 0 && !a.startsWith('-'));
+    if (!manifest) {
+      err('adapters add: manifest path required (see docs/PROTOCOL.md and examples/example-adapter/)');
+      return 2;
+    }
+    const abs = resolvePath(manifest);
+    const trust = flags.trust || process.env.MOH_ALLOW_EXTERNAL_ADAPTERS === '1';
+    try {
+      const a = registerExternalAdapter(abs, { trust: !!trust });
+      const cfg = configExists() ? loadConfig() : {};
+      const list = new Set(cfg.externalAdapters || []);
+      list.add(abs);
+      saveConfig({ ...cfg, externalAdapters: [...list], trustExternal: cfg.trustExternal === true || !!flags.trust });
+      out(c.green(`registered external adapter '${a.id}' (${a.displayName}). Enable per-session with MOH_ALLOW_EXTERNAL_ADAPTERS=1${flags.trust ? ' or trustExternal set in config' : ''}.`));
+      out(c.dim('You are trusting local third-party code. Review the adapter before running real tasks.'));
+      return 0;
+    } catch (e) {
+      err(`adapters add: ${e.message}`);
+      return 1;
+    }
+  }
   const data = [];
   for (const a of listAdapters()) {
     const caps = a.capabilities();
@@ -321,11 +364,17 @@ function scanLegacy() {
   const out = [];
   const seen = new Set();
   for (const dir of legacyCouncilDirs()) {
-    for (const { path, legacy } of scanLegacyCouncil(dir)) {
-      if (!legacy || seen.has(path)) continue;
+    for (const { path, legacy, error } of scanLegacyCouncil(dir)) {
+      if (seen.has(path)) continue;
       seen.add(path);
+      // Malformed/unparseable legacy records are QUARANTINED and surfaced, never
+      // silently skipped — so a corrupt run is visible rather than vanishing.
+      if (!legacy) {
+        out.push({ runId: `(quarantined: ${basename(path)})`, quarantined: true, reason: error || 'unparseable legacy record', _path: path });
+        continue;
+      }
       const res = migrateCouncilRun(legacy, { sourcePath: path });
-      out.push(res.ok ? { ...res.migrated, _path: path } : { runId: '(quarantined)', quarantined: true, reason: res.reason, _path: path });
+      out.push(res.ok ? { ...res.migrated, _path: path } : { runId: `(quarantined: ${basename(path)})`, quarantined: true, reason: res.reason, _path: path });
     }
   }
   return out;
@@ -435,9 +484,12 @@ async function cmdResume(rest) {
 
   const doRetry = flags.retry || flags.yes;
   if (!doRetry) {
-    out('\nStart a deliberate retry (fresh run, same configuration) with:');
+    out('\nStart a deliberate retry with:');
     out(c.cyan(`  moh resume ${runId} --retry`));
-    out(c.dim('(A retry re-runs from scratch with the same seats/task; it will not reuse a paid session or re-bill a completed turn.)'));
+    out(c.yellow('  Note: a retry starts a NEW run and RE-EXECUTES every turn from scratch'));
+    out(c.yellow('  (this WILL re-invoke the harnesses and re-incur their cost). moh does not'));
+    out(c.yellow('  yet resume a partially-completed run mid-stage (that is a P1 capability);'));
+    out(c.dim('  the original run and its workspaces are preserved either way.'));
     return 0;
   }
 
@@ -445,21 +497,30 @@ async function cmdResume(rest) {
     err('resume --retry: original task text is not available for this run.');
     return 1;
   }
-  out('\n' + c.bold('Deliberate retry — starting a fresh run with the same configuration…'));
+  out('\n' + c.bold('Deliberate retry — starting a NEW run and re-executing all turns (harnesses will be re-invoked)…'));
   const decider = flags.yes ? autoDecider() : interactiveDecider();
   const app = new Application({ decider });
   app.subscribe((e) => {
     if (flags.json) out(JSON.stringify(e));
   });
-  const { runId: newId, state: newState } = await app.createRun({
-    preset: state.preset,
-    task: state.task,
-    seed: state.seed,
-    seats: state.seats,
-    timeoutMs: state.timeoutMs,
-  });
-  out(c.dim(`new run id: ${newId} (original ${runId} preserved)`));
-  const outcome = await app.run(newId);
-  printRunSummary(app.store, newId, newState, outcome);
-  return outcome.status === 'finished' ? 0 : 0;
+  let outcome;
+  try {
+    const { runId: newId, state: newState } = await app.createRun({
+      preset: state.preset,
+      task: state.task,
+      seed: state.seed,
+      seats: state.seats,
+      timeoutMs: state.timeoutMs,
+    });
+    out(c.dim(`new run id: ${newId} (original ${runId} preserved)`));
+    outcome = await app.run(newId);
+    printRunSummary(app.store, newId, newState, outcome);
+  } catch (e) {
+    err(`resume --retry failed: ${e.message}`);
+    return 1;
+  }
+  // Honest exit codes: non-zero when the run did not finish successfully.
+  if (outcome.status === 'finished') return 0;
+  if (outcome.status === 'failed') return 1;
+  return 2; // declined / not_created / blocked
 }

@@ -68,6 +68,27 @@ Rules:
 - moh supervises the process: bounded output/runtime, byte-safe decoding, and
   process-tree cancellation. Exit 0 on success.
 
+## Registering with moh
+
+Register an external adapter through the CLI or the public API, then use it like any
+built-in adapter (`moh run --seat-a <id>`):
+
+```bash
+# CLI — persists the manifest to config and registers it (opt-in).
+moh adapters add ./examples/example-adapter/moh-adapter.json --trust
+MOH_ALLOW_EXTERNAL_ADAPTERS=1 moh adapters      # now lists example-external
+MOH_ALLOW_EXTERNAL_ADAPTERS=1 moh run --seat-a example-external --seat-b fake --task "..." --yes
+```
+
+```js
+// Public API (from the package root export).
+import { registerExternalAdapter, Application } from 'mixture-of-harnesses';
+registerExternalAdapter('/abs/path/moh-adapter.json', { trust: true });
+```
+
+Configured adapters listed under `externalAdapters` in `config.json` are loaded at CLI
+startup when `MOH_ALLOW_EXTERNAL_ADAPTERS=1` (or `trustExternal: true` in config).
+
 ## Conformance
 
 `examples/example-adapter/` is a complete, deterministic reference adapter. The

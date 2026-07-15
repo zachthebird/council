@@ -76,11 +76,48 @@ export class RunStore {
       try {
         out.push(JSON.parse(t));
       } catch {
-        // A torn last line (crash mid-append) is skipped, not fatal — no replay gap
-        // because seq is validated by the reader.
+        // A torn last line (crash mid-append) is skipped, not fatal.
       }
     }
     return out;
+  }
+
+  /**
+   * Replay with integrity validation. Returns { events, gaps, duplicates, torn }.
+   * `gaps` lists missing sequence numbers, `duplicates` repeated ones, `torn` counts
+   * unparParseable trailing lines — so recovery can detect an incomplete/corrupt log
+   * instead of assuming contiguity.
+   */
+  replay(runId) {
+    const f = join(this.runPath(runId), 'events.jsonl');
+    if (!existsSync(f)) return { events: [], gaps: [], duplicates: [], torn: 0 };
+    const events = [];
+    let torn = 0;
+    for (const line of readFileSync(f, 'utf8').split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        events.push(JSON.parse(t));
+      } catch {
+        torn += 1;
+      }
+    }
+    const gaps = [];
+    const duplicates = [];
+    const seen = new Set();
+    let expected = 1;
+    for (const e of events) {
+      const s = e.seq;
+      if (typeof s === 'number') {
+        if (seen.has(s)) duplicates.push(s);
+        seen.add(s);
+      }
+    }
+    if (seen.size) {
+      const max = Math.max(...seen);
+      for (expected = 1; expected <= max; expected++) if (!seen.has(expected)) gaps.push(expected);
+    }
+    return { events, gaps, duplicates, torn };
   }
 
   writeReceipt(runId, receipt) {

@@ -58,6 +58,36 @@ test('gate 25: terminal control sequences are stripped from harness output', () 
   assert.equal(stripControl('a\tb\nc'), 'a\tb\nc');
 });
 
+test('BOUNDS: stderr is bounded (harness cannot exhaust memory via stderr spam)', async () => {
+  const node = process.execPath;
+  const h = runProcess({
+    executable: node,
+    argv: ['-e', 'const b=Buffer.alloc(65536,120);let n=0;const t=setInterval(()=>{process.stderr.write(b);if(++n>200)clearInterval(t);},1);setTimeout(()=>{},5000);'],
+    env: buildChildEnv({}).env,
+    cwd: process.cwd(),
+    limits: { maxStderrBytes: 256 * 1024, killGraceMs: 300 },
+  });
+  const res = await h.promise;
+  assert.equal(res.killedForSize, true, 'process killed once stderr bound exceeded');
+});
+
+test('BOUNDS: over-large stdin prompt is truncated, not passed unbounded', async () => {
+  const node = process.execPath;
+  let captured = '';
+  const h = runProcess({
+    executable: node,
+    argv: ['-e', 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>process.stdout.write(String(d.length)));'],
+    env: buildChildEnv({}).env,
+    cwd: process.cwd(),
+    stdin: 'x'.repeat(1_000_000),
+    limits: { maxStdinBytes: 1024 },
+    onStdout: (s) => (captured += s),
+  });
+  const res = await h.promise;
+  assert.equal(res.stdinTruncated, true);
+  assert.ok(Number(captured) <= 1024, 'child received at most the bounded stdin');
+});
+
 test('gate 18: cancellation terminates the process (tree) and reports cancelled', async () => {
   const node = process.execPath;
   const h = runProcess({

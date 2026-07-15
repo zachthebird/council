@@ -6,6 +6,7 @@ import { claudeCodeAdapter } from './claude-code.mjs';
 import { codexCliAdapter } from './codex-cli.mjs';
 import { openclawAdapter } from './openclaw.mjs';
 import { hermesAdapter } from './hermes.mjs';
+import { loadExternalAdapter } from './external.mjs';
 
 const registry = new Map();
 
@@ -13,6 +14,16 @@ export function register(adapter) {
   assertAdapterShape(adapter);
   registry.set(adapter.id, adapter);
   return adapter;
+}
+
+/**
+ * Load and register a third-party adapter from a manifest path. Requires explicit
+ * opt-in (opts.trust === true or MOH_ALLOW_EXTERNAL_ADAPTERS=1); enabling one means
+ * trusting local code. Returns the registered adapter.
+ */
+export function registerExternalAdapter(manifestPath, opts = {}) {
+  const adapter = loadExternalAdapter(manifestPath, opts);
+  return register(adapter);
 }
 
 export function getAdapter(id) {

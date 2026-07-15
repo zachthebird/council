@@ -74,6 +74,9 @@ the owner, typically for the first public release:
 7. **Rename the GitHub repository** to its public name if it has not been
    renamed already.
 8. **Make the repository public.**
+   - Also confirm the `repository`/`homepage`/`bugs` URLs in `package.json` point at
+     the real org/handle. They currently default to `github.com/zachthebird/...`
+     (derived from the owner email); update if the actual GitHub owner differs.
 9. **Configure npm trusted publishing (OIDC)** so publishes are authenticated
    via CI identity rather than a long-lived token.
 10. **Publish to npm.** During beta, publish under an appropriate dist-tag
