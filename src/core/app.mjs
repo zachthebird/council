@@ -104,6 +104,18 @@ export class Application {
     const runId = this.ids.runId();
     if (!isSafeRunId(runId)) throw new Error(`generated unsafe run id: ${runId}`);
     const preset = config.preset || Preset.FULL_MIXTURE;
+    // P0 supports EXACTLY two seats with UNIQUE ids. Enforce before any workspace is
+    // created so a duplicate id can never share/delete another seat's workspace (and
+    // never after a paid turn has run).
+    if (!Array.isArray(config.seats) || config.seats.length !== 2) {
+      throw new Error(`P0 requires exactly two seats (got ${Array.isArray(config.seats) ? config.seats.length : 'none'})`);
+    }
+    const seatIdSet = new Set();
+    for (let i = 0; i < config.seats.length; i++) {
+      const id = config.seats[i].seatId || (i === 0 ? 'seat-a' : 'seat-b');
+      if (seatIdSet.has(id)) throw new Error(`duplicate seat id: ${JSON.stringify(id)} (seat ids must be unique)`);
+      seatIdSet.add(id);
+    }
     const seats = config.seats.map((s, i) => {
       const seatId = s.seatId || (i === 0 ? 'seat-a' : 'seat-b');
       // Seat ids become filesystem path segments — reject traversal before use.
@@ -139,6 +151,7 @@ export class Application {
       review: null,
       reviewIntegrity: 'unattested',
       result: null,
+      limitations: [],
       status: 'running',
     };
     this.store.create(runId, state);
@@ -284,10 +297,36 @@ export class Application {
     return { status: result.status, finalText: result.finalText || '', sessionId: result.sessionId || null, provenance: prov, attemptId };
   }
 
+  /** Terminal run statuses — a completed run is never silently re-driven. */
+  static TERMINAL = new Set(['finished', 'failed', 'declined', 'not_created', 'blocked']);
+
+  /**
+   * Seed the per-run sequence counter from the durable record so a restarted
+   * Application (or any second emitter on the same run) never reuses a seq number.
+   */
+  _seedSeq(runId, state) {
+    if (this._seqByRun.has(runId)) return;
+    let max = typeof state?.seq === 'number' ? state.seq : 0;
+    // The event log is authoritative for the true high-water mark.
+    try {
+      for (const e of this.store.readEvents(runId)) if (typeof e.seq === 'number' && e.seq > max) max = e.seq;
+    } catch {
+      /* ignore */
+    }
+    this._seqByRun.set(runId, max);
+    if (max > 0) this._finishedRuns.delete(runId); // allow appends to continue from max
+  }
+
   /** Run the full workflow to completion (or a gate abort). */
   async run(runId) {
     const state = this.store.loadState(runId);
     if (!state) throw new Error(`run not found: ${runId}`);
+    // Refuse to re-drive a completed run: this would repeat paid turns and append a
+    // second run.finished. Callers wanting a re-attempt use `resume --retry` (a NEW run).
+    if (Application.TERMINAL.has(state.status)) {
+      throw new Error(`run ${runId} is already ${state.status}; use \`moh resume ${runId} --retry\` to start a fresh run`);
+    }
+    this._seedSeq(runId, state); // never reuse a persisted sequence number
     try {
       const outcome = await this._drive(state);
       state.status = outcome.status;
@@ -337,16 +376,19 @@ export class Application {
       this._saveStage(state, Stage.CRITIQUE);
       critique[seatA.seatId] = await this._seatTurn(state, seatA, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatB.seatId].finalText, otherDiff: seatDiff[seatB.seatId] }) });
       critique[seatB.seatId] = await this._seatTurn(state, seatB, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatA.seatId].finalText, otherDiff: seatDiff[seatA.seatId] }) });
-      const okCount = Object.values(critique).filter((c) => c.status === 'ok').length;
-      // A required cross-critique that did not complete must not silently pass. If
-      // BOTH critiques failed, the mixture's peer-review step did not happen -> the
-      // result cannot be cleanly approved. Only signal readiness when both succeed.
-      if (okCount === Object.keys(critique).length) {
+      const total = Object.keys(critique).length;
+      const failedSeats = Object.entries(critique).filter(([, c]) => c.status !== 'ok').map(([id]) => id);
+      // ANY failed cross-critique degrades the mixture: the peer-review step did not
+      // fully happen, so the result cannot be a clean, ATTESTED approval and the
+      // receipt records a limitation. Only signal readiness when EVERY critique
+      // succeeded.
+      if (failedSeats.length === 0) {
         this._emit(state.runId, { kind: EventKind.CRITIQUE_READY, stage: Stage.CRITIQUE, payload: { seats: Object.keys(critique) } });
       } else {
         state.critiqueDegraded = true;
-        this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.CRITIQUE, payload: { level: 'warn', code: 'critique_incomplete', message: `${Object.keys(critique).length - okCount} critique turn(s) failed` } });
-        if (okCount === 0) critiqueFailed = true;
+        critiqueFailed = true; // any failure blocks a clean attested approval
+        state.limitations.push(`Cross-critique incomplete: ${failedSeats.length}/${total} critique turn(s) failed (${failedSeats.join(', ')}).`);
+        this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.CRITIQUE, payload: { level: 'warn', code: 'critique_incomplete', message: `${failedSeats.length}/${total} critique turn(s) failed; result cannot be cleanly approved` } });
       }
     }
 
@@ -386,6 +428,7 @@ export class Application {
       if (integ.status !== 'ok') {
         integrationFailed = true;
         state.integrationFailed = true;
+        state.limitations.push(`Integration turn ${integ.status}; result cannot be cleanly approved.`);
         this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.INTEGRATE, payload: { level: 'error', code: 'integration_failed', message: `integration turn ${integ.status}; result cannot be cleanly approved` } });
       } else {
         this._emit(state.runId, { kind: EventKind.INTEGRATION_READY, stage: Stage.INTEGRATE, payload: { leaderSeatId } });
@@ -409,6 +452,7 @@ export class Application {
       // revision.ready, do not re-review a non-revision, and block clean approval.
       if (rev.status !== 'ok') {
         revisionFailed = true;
+        state.limitations.push(`Revision turn ${rev.status}; result cannot be cleanly approved.`);
         this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.REVISE, payload: { level: 'error', code: 'revision_failed', message: `revision turn ${rev.status}; result cannot be cleanly approved` } });
         break;
       }
@@ -422,9 +466,11 @@ export class Application {
     state.review = review;
     state.reviewedTreeOid = reviewedTree;
     // Review integrity is `attested` ONLY when the verdict was parsed from the nonce
-    // record AND all required evidence bytes were read from git objects (no unread
-    // truncation). Parsing alone is not sufficient.
-    state.reviewIntegrity = review && review.attested ? 'attested' : 'unattested';
+    // record, ALL required evidence bytes were read from git objects (no unread
+    // truncation), AND no required workflow turn was degraded. Parsing alone is not
+    // sufficient, and a degraded mixture is never a clean, attested approval.
+    const workflowDegraded = integrationFailed || critiqueFailed || revisionFailed;
+    state.reviewIntegrity = review && review.attested && !workflowDegraded ? 'attested' : 'unattested';
 
     // Determine final verdict for the gate.
     let verdict = review ? review.verdict : Verdict.UNREVIEWED;
@@ -508,7 +554,11 @@ export class Application {
       review,
       reviewIntegrity: state.reviewIntegrity,
       decisions: { leaderSeatId, humanOverride: !isApproved(verdict), recordVerdict },
-      limitations: soleSurvivor ? ['Sole-survivor run: only one seat produced a solution.'] : [],
+      limitations: [
+        ...(soleSurvivor ? ['Sole-survivor run: only one seat produced a solution.'] : []),
+        ...state.limitations,
+        ...(state.review?.truncations?.length ? [`Review evidence truncated for: ${state.review.truncations.join(', ')} (approval not attested).`] : []),
+      ],
       truncations: state.review?.truncations || [],
     });
     this.store.writeReceipt(state.runId, receipt);

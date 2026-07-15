@@ -64,12 +64,27 @@ export function loadExternalAdapter(manifestPath, opts = {}) {
     throw new Error('external adapters are disabled. Enable explicitly with MOH_ALLOW_EXTERNAL_ADAPTERS=1 (you are trusting local code).');
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+  // Enforce the protocol version — a manifest for a future/unknown protocol is refused
+  // rather than silently mis-driven.
+  const proto = manifest.protocol;
+  if (proto !== undefined && proto !== EXTERNAL_PROTOCOL_VERSION) {
+    throw new Error(`unsupported external-adapter protocol ${JSON.stringify(proto)}; this build speaks protocol ${EXTERNAL_PROTOCOL_VERSION}`);
+  }
+  if (!manifest.id || typeof manifest.id !== 'string') throw new Error('external adapter manifest missing a string "id"');
+
   const baseDir = dirname(resolve(manifestPath));
   const exe = isAbsolute(manifest.executable) ? manifest.executable : resolve(baseDir, manifest.executable);
   if (!existsSync(exe) || !statSync(exe).isFile()) throw new Error(`external adapter executable not found: ${exe}`);
   const realExe = realpathSync(exe);
-  const argv = Array.isArray(manifest.argv) ? manifest.argv.map(String) : [];
+  const manifestArgv = Array.isArray(manifest.argv) ? manifest.argv.map(String) : [];
   const caps = capabilityMap(manifest.capabilities || {});
+
+  // Portability: a script adapter (.mjs/.cjs/.js) is launched via the current Node
+  // binary rather than relying on a shebang, which does not work on Windows.
+  const isScript = /\.(mjs|cjs|js)$/i.test(realExe);
+  const spawnExe = isScript ? process.execPath : realExe;
+  const spawnArgvPrefix = isScript ? [realExe] : [];
 
   return {
     id: manifest.id,
@@ -105,7 +120,7 @@ export function loadExternalAdapter(manifestPath, opts = {}) {
           requestedEffort: ctx.requestedEffort ?? null,
         },
       };
-      return { executable: realExe, argv, env: {}, authEnvNames: manifest.authEnvNames || [], stdin: JSON.stringify(turn) + '\n' };
+      return { executable: spawnExe, argv: [...spawnArgvPrefix, ...manifestArgv], env: {}, authEnvNames: manifest.authEnvNames || [], stdin: JSON.stringify(turn) + '\n' };
     },
     parseEvents: externalParseEvents,
     finalize(state) {

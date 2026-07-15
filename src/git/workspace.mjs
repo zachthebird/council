@@ -142,6 +142,26 @@ export function baseCommit(dir) {
 const EMPTY_TREE_OID = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 /**
+ * True if any INTERMEDIATE directory component of `relPath` (under `dir`) is a
+ * symlink. Reading through such a component could escape the workspace, so callers
+ * must refuse the path. The final component is NOT checked here (a leaf symlink is
+ * handled explicitly as a link blob).
+ */
+function ancestorIsSymlink(dir, relPath) {
+  const parts = relPath.split('/').filter((s) => s && s !== '.');
+  let cur = dir;
+  for (let i = 0; i < parts.length - 1; i++) {
+    cur = join(cur, parts[i]);
+    try {
+      if (lstatSync(cur).isSymbolicLink()) return true;
+    } catch {
+      return true; // cannot stat an ancestor -> treat as unsafe
+    }
+  }
+  return false;
+}
+
+/**
  * Capture an immutable candidate tree from the current worktree WITHOUT running
  * ANY repository-defined clean/smudge filter. Filters are the vector by which a
  * harness-planted `.git/config` could execute code / exfiltrate env during a
@@ -166,28 +186,68 @@ export function captureTree(dir) {
     const listed = withIdx(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
     const paths = listed.split('\0').filter(Boolean);
     const seen = new Set();
+    // Real path of the workspace root — the root itself may live under a symlinked
+    // temp dir (e.g. macOS /var -> /private/var), so resolve it before containment checks.
+    let dirRoot;
+    try {
+      dirRoot = realpathSync(dir);
+    } catch {
+      dirRoot = resolve(dir);
+    }
     for (const p of paths) {
       if (seen.has(p)) continue;
       seen.add(p);
       const abs = join(dir, p);
+
+      // SYMLINK-ESCAPE DEFENSE: refuse any path whose *intermediate* directory
+      // components are symlinks (a tracked dir replaced by a symlink to external
+      // data would otherwise let hash-object read outside the workspace). If an
+      // ancestor is a symlink, drop the on-disk view and force-remove the entry so
+      // the candidate tree never contains escaped content.
+      if (ancestorIsSymlink(dir, p)) {
+        withIdx(['update-index', '--force-remove', '--', p]);
+        continue;
+      }
+
       let st;
       try {
-        st = lstatSync(abs);
+        st = lstatSync(abs); // lstat: never follows the final component
       } catch {
         // Present in index but gone on disk -> deletion.
         withIdx(['update-index', '--force-remove', '--', p]);
         continue;
       }
-      if (st.isDirectory()) continue; // gitlink/submodule dirs are out of scope
+
       let oid;
       let mode;
       if (st.isSymbolicLink()) {
+        // Store the link itself (target string), never follow it.
         const target = readlinkSync(abs);
         oid = git(dir, ['hash-object', '-w', '--no-filters', '--stdin'], { input: target }, idx);
         mode = '120000';
-      } else {
+      } else if (st.isFile()) {
+        // Only regular files are hashed. This also avoids hanging forever on a
+        // FIFO/socket/device (synchronous hash-object would block on those).
+        // Confirm the real path stays inside the workspace (defense in depth).
+        let real;
+        try {
+          real = realpathSync(abs);
+        } catch {
+          withIdx(['update-index', '--force-remove', '--', p]);
+          continue;
+        }
+        const rel = relative(dirRoot, real);
+        if (rel.startsWith('..') || isAbsolute(rel)) {
+          withIdx(['update-index', '--force-remove', '--', p]);
+          continue;
+        }
         oid = git(dir, ['hash-object', '-w', '--no-filters', '--', abs], {}, idx);
         mode = st.mode & 0o111 ? '100755' : '100644';
+      } else {
+        // Directory (file->dir replacement), FIFO, socket, or device: not a blob.
+        // Force-remove any stale index entry so write-tree does not conflict/hang.
+        withIdx(['update-index', '--force-remove', '--', p]);
+        continue;
       }
       withIdx(['update-index', '--add', '--cacheinfo', `${mode},${oid},${p}`]);
     }
@@ -277,9 +337,20 @@ export function buildReviewEvidence(dir, baseOid, treeOid, { maxBytes = 512 * 10
     if (buf.length > maxFileBytes || total + buf.length > maxBytes) {
       return { included: false, note: `(content omitted: exceeds review size bound)` };
     }
+    // Content is only ATTESTABLE if the reviewer receives it faithfully. Binary and
+    // invalid-UTF-8 blobs cannot be shown as verbatim text, so they are marked
+    // NOT included (-> truncated -> unattested), while still recording a digest.
+    let text;
+    try {
+      text = new TextDecoder('utf8', { fatal: true }).decode(buf); // throws on invalid UTF-8
+    } catch {
+      return { included: false, note: `(binary or non-UTF-8 content, ${buf.length} bytes — not shown; cannot be attested)` };
+    }
+    if (buf.includes(0)) {
+      return { included: false, note: `(binary content, ${buf.length} bytes — not shown; cannot be attested)` };
+    }
     total += buf.length;
-    const isText = !buf.subarray(0, Math.min(buf.length, 8000)).includes(0);
-    return { included: true, note: isText ? '```\n' + buf.toString('utf8') + '\n```' : `(binary, ${buf.length} bytes)` };
+    return { included: true, note: '```\n' + text + '\n```' };
   };
 
   for (const ch of changes) {

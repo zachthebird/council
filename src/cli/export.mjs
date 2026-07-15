@@ -59,7 +59,9 @@ export async function exportRun(rest) {
   const includeContent = !!flags['include-content'];
   if (includeContent) out(c.yellow('WARNING: --include-content will embed repository/prompt content. Preview before sharing.'));
 
-  const safeState = includeContent ? state : sanitizeState(state);
+  // --include-content includes repository/prompt CONTENT, but NEVER secrets:
+  // redaction of secret-shaped values and secret-named keys is unconditional.
+  const safeState = includeContent ? redactDeep(structuredClone(state)) : sanitizeState(state);
   const safeReceipt = receipt ? (includeContent ? redactDeep(receipt) : sanitizeReceipt(receipt)) : null;
 
   if (format === 'json') {

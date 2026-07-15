@@ -54,6 +54,10 @@ export function redact(input) {
   return s;
 }
 
+// Keys whose VALUE is redacted wholesale regardless of shape (a short/opaque
+// secret would otherwise slip past pattern matching).
+const SECRET_KEY = /^(env|environment|headers?|cookies?|credentials?|secret|secrets|password|passwd|pwd|pass|token|tokens|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|api[_-]?secret|client[_-]?secret|private[_-]?key|session[_-]?key|auth|authorization|bearer|passphrase)$/i;
+
 /** Deep-redact an object for safe persistence/export. */
 export function redactDeep(value, seen = new WeakSet()) {
   if (typeof value === 'string') return redact(value);
@@ -63,7 +67,7 @@ export function redactDeep(value, seen = new WeakSet()) {
     seen.add(value);
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-      if (/^(env|environment|headers|cookies?|credentials?)$/i.test(k)) {
+      if (SECRET_KEY.test(k)) {
         out[k] = '[redacted]';
       } else {
         out[k] = redactDeep(v, seen);

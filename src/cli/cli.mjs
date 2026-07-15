@@ -310,7 +310,12 @@ async function cmdRun(rest) {
   } else {
     printRunSummary(app.store, runId, state, outcome);
   }
-  return outcome.status === 'finished' ? 0 : outcome.status === 'failed' ? 1 : 0;
+  // Honest exit codes: 0 only when a result was actually created. `blocked`,
+  // `not_created`, and `declined` mean integrity checks or a human prevented result
+  // creation — automation must see a NON-zero code, not success.
+  if (outcome.status === 'finished') return 0;
+  if (outcome.status === 'failed') return 1;
+  return 3; // declined / not_created / blocked
 }
 
 function parseSeed(seed) {
@@ -363,7 +368,10 @@ function interactiveDecider() {
 function scanLegacy() {
   const out = [];
   const seen = new Set();
+  const active = resolvePath(stateDir());
   for (const dir of legacyCouncilDirs()) {
+    // Never treat moh's OWN active state dir as a legacy source (defense in depth).
+    if (resolvePath(dir) === active) continue;
     for (const { path, legacy, error } of scanLegacyCouncil(dir)) {
       if (seen.has(path)) continue;
       seen.add(path);

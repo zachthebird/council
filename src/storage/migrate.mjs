@@ -13,10 +13,15 @@ export function migrateCouncilRun(legacy, { sourcePath = null } = {}) {
   if (!legacy || typeof legacy !== 'object') {
     return { ok: false, reason: 'legacy run is not an object', quarantined: true };
   }
-  // Detect a newer/unknown schema — do NOT discard; quarantine with a note.
-  const legacySchema = legacy.schema ?? legacy.version ?? null;
-  if (typeof legacySchema === 'number' && legacySchema > 1000) {
-    return { ok: false, reason: `unrecognized legacy schema ${legacySchema}`, quarantined: true, original: legacy };
+  // Detect a newer/unknown schema — do NOT discard; quarantine with a note. We only
+  // understand legacy records with no explicit schema marker or schema <= 1. Anything
+  // else (e.g. {schema:2} or a non-numeric schema) is unrecognized and quarantined
+  // rather than mis-migrated. (`version` is treated as an app version, not a schema.)
+  if (Object.prototype.hasOwnProperty.call(legacy, 'schema')) {
+    const s = legacy.schema;
+    if (typeof s !== 'number' || s > MIGRATION_VERSION) {
+      return { ok: false, reason: `unrecognized legacy schema ${JSON.stringify(s)}`, quarantined: true, original: legacy };
+    }
   }
 
   const seats = [];
@@ -104,11 +109,15 @@ export function scanLegacyCouncil(dir) {
   return found;
 }
 
-/** COUNCIL_* env compatibility for one release, with deprecation warnings. */
+/**
+ * COUNCIL_* env compatibility for one release, with deprecation warnings.
+ * NOTE: we deliberately DO NOT alias COUNCIL_STATE_DIR/COUNCIL_CONFIG_DIR to the
+ * MOH state/config dirs — doing so would make moh WRITE new runs/config into the
+ * legacy Council directory and then re-migrate its own output. Legacy state dirs
+ * are READ-ONLY (see legacyCouncilDirs()); only harness-path aliases are forwarded.
+ */
 export function applyLegacyEnvCompat(logger = () => {}) {
   const map = [
-    ['COUNCIL_STATE_DIR', 'MOH_STATE_DIR'],
-    ['COUNCIL_CONFIG_DIR', 'MOH_CONFIG_DIR'],
     ['COUNCIL_CLAUDE_PATH', 'MOH_CLAUDE_PATH'],
     ['COUNCIL_CODEX_PATH', 'MOH_CODEX_PATH'],
   ];
