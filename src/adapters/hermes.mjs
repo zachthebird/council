@@ -5,10 +5,13 @@
 import { realpathSync, existsSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { TrustLevel, Readiness, Capability, CapabilityState, capabilityMap } from './contract.mjs';
+import { buildChildEnv } from '../process/env-policy.mjs';
+
+const PROBE_ENV = () => buildChildEnv({}).env;
 
 function onPath(name) {
   try {
-    const p = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8' }).split('\n')[0].trim();
+    const p = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8', env: PROBE_ENV() }).split('\n')[0].trim();
     return p || null;
   } catch {
     return null;

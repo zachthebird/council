@@ -3,17 +3,17 @@
 // adapter *contract* and registry, never a UI module.
 import { join } from 'node:path';
 import { EventBus, makeEvent, EventKind } from './events.mjs';
-import { makeIdFactory } from './ids.mjs';
+import { makeIdFactory, isSafeSegment, isSafeRunId } from './ids.mjs';
 import { Stage, Preset, stagesFor, hasIntegration } from './state.mjs';
 import { newProvenance, observeModel, ProvenanceState } from './provenance.mjs';
 import { newReviewChallenge, parseReview, Verdict, isApproved } from './review.mjs';
 import { buildReceipt } from './receipt.mjs';
 import { RunStore } from '../storage/store.mjs';
 import { getAdapter } from '../adapters/registry.mjs';
-import { prepareWorkspace, captureTree, changedPaths, digestFiles, createResultBranch, baseCommit } from '../git/workspace.mjs';
+import { prepareWorkspace, captureTree, changedPaths, digestFiles, createResultBranch, buildReviewEvidence, assertInside } from '../git/workspace.mjs';
 import { workspacesDir } from '../storage/paths.mjs';
 import { authPresent } from '../process/env-policy.mjs';
-import { stripControl } from '../security/redact.mjs';
+import { stripControl, redactDeep, sanitizeGitUrl } from '../security/redact.mjs';
 import * as P from '../prompts/prompts.mjs';
 
 const MAX_REVISIONS = 1;
@@ -54,7 +54,9 @@ export class Application {
   _emit(runId, partial) {
     this._seq += 1;
     const ts = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
-    const evt = makeEvent({ seq: this._seq, runId, ts, ...partial });
+    // Redact secret-shaped values and secret-named keys from EVERY event before it
+    // is persisted or broadcast (covers text, notices, model metadata, errors).
+    const evt = redactDeep(makeEvent({ seq: this._seq, runId, ts, ...partial }));
     this.store.appendEvent(runId, evt);
     this.bus.emit(evt);
     return evt;
@@ -81,11 +83,26 @@ export class Application {
     return seat.authLabel || 'authentication unknown';
   }
 
+  /** Sanitize a seed spec BEFORE it is persisted; reject embedded credentials. */
+  _safeSeed(seed) {
+    if (!seed || typeof seed !== 'object') return { kind: 'greenfield' };
+    if (seed.kind === 'url') {
+      // Throws on credential-bearing URLs so they never reach disk.
+      return { kind: 'url', url: sanitizeGitUrl(seed.url, { reject: true }) };
+    }
+    return seed;
+  }
+
   async createRun(config) {
     const runId = this.ids.runId();
+    if (!isSafeRunId(runId)) throw new Error(`generated unsafe run id: ${runId}`);
     const preset = config.preset || Preset.FULL_MIXTURE;
-    const seats = config.seats.map((s, i) => ({
-      seatId: s.seatId || (i === 0 ? 'seat-a' : 'seat-b'),
+    const seats = config.seats.map((s, i) => {
+      const seatId = s.seatId || (i === 0 ? 'seat-a' : 'seat-b');
+      // Seat ids become filesystem path segments — reject traversal before use.
+      if (!isSafeSegment(seatId)) throw new Error(`unsafe seat id: ${JSON.stringify(seatId)}`);
+      return {
+      seatId,
       label: s.label || (i === 0 ? 'Seat A' : 'Seat B'),
       adapterId: s.adapterId,
       requestedModel: s.requestedModel ?? null,
@@ -95,12 +112,13 @@ export class Application {
       authEnvNames: s.authEnvNames ?? [],
       authLabel: s.authLabel,
       adapterConfig: s.adapterConfig ?? {},
-    }));
+      };
+    });
     const state = {
       runId,
       preset,
       task: config.task,
-      seed: config.seed,
+      seed: this._safeSeed(config.seed),
       stage: Stage.CREATED,
       seats,
       timeoutMs: config.timeoutMs ?? undefined,
@@ -130,8 +148,12 @@ export class Application {
 
   /** Prepare an isolated git workspace per seat. */
   _prepareSeatWorkspace(state, seat) {
-    const dir = join(this.workspacesRoot, state.runId, seat.seatId);
-    const { base } = prepareWorkspace(dir, state.seed);
+    const root = join(this.workspacesRoot, state.runId);
+    const dir = join(root, seat.seatId);
+    // Guard: the destination MUST resolve inside the run's workspaces root before
+    // prepareWorkspace performs any recursive delete.
+    assertInside(this.workspacesRoot, dir);
+    const { base } = prepareWorkspace(dir, state.seed, { allowedRoot: this.workspacesRoot, deterministic: this.deterministic });
     state.workspaces[seat.seatId] = { dir, base };
     return dir;
   }
@@ -219,10 +241,27 @@ export class Application {
     prov.endedAt = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
     prov.sessionId = result.sessionId || prov.sessionId;
     prov.exitStatus = result.status;
+    prov.turnId = turnId;
+    prov.role = role;
     if (prov.state === ProvenanceState.REQUESTED_ONLY && !prov.reportedModel) {
       prov.state = seat.requestedModel ? ProvenanceState.REQUESTED_ONLY : ProvenanceState.NOT_REPORTED;
     }
+    // Accumulate provenance across turns: keep the full per-turn record AND carry
+    // cross-turn model-change/fallback history forward so it is never overwritten.
+    if (!state.turnsBySeat) state.turnsBySeat = {};
+    if (!state.turnsBySeat[seat.seatId]) state.turnsBySeat[seat.seatId] = [];
+    const prevAgg = state.provenanceBySeat[seat.seatId];
+    const mergedHistory = [...(prevAgg?.history || []), ...prov.history];
+    if (prevAgg?.reportedModel && prov.reportedModel && prevAgg.reportedModel !== prov.reportedModel) {
+      mergedHistory.push({ from: prevAgg.reportedModel, to: prov.reportedModel, turn: turnId, role, crossTurn: true });
+      if (prov.state === ProvenanceState.RUNTIME_REPORTED) prov.state = ProvenanceState.MISMATCH_OR_FALLBACK;
+    }
+    prov.history = mergedHistory;
+    state.turnsBySeat[seat.seatId].push({ turnId, role, stage: state.stage, provenance: JSON.parse(JSON.stringify(prov)) });
     state.provenanceBySeat[seat.seatId] = prov;
+    if (mergedHistory.length && mergedHistory[mergedHistory.length - 1]?.crossTurn) {
+      this._emit(state.runId, { kind: EventKind.SEAT_MODEL_MISMATCH, stage: state.stage, seatId: seat.seatId, attemptId, turnId, payload: { requested: prov.requestedModel, reported: prov.reportedModel, history: prov.history }, provenance: prov });
+    }
 
     if (result.status === 'cancelled') {
       this._emit(state.runId, { kind: EventKind.SEAT_TURN_CANCELLED, stage: state.stage, seatId: seat.seatId, attemptId, turnId, payload: { role }, provenance: prov });
@@ -275,12 +314,17 @@ export class Application {
     }
     const soleSurvivor = survivors.length === 1;
 
+    // Peer ACTUAL diffs (read from git objects) so critics/leader see real code,
+    // not just a self-reported summary.
+    const seatDiff = {};
+    for (const s of survivors) seatDiff[s.seatId] = this._seatEvidence(state, s.seatId);
+
     // --- CRITIQUE (full mixture only, and only with two survivors) ---
     const critique = {};
     if (hasIntegration(state.preset) && !soleSurvivor) {
       this._saveStage(state, Stage.CRITIQUE);
-      critique[seatA.seatId] = await this._seatTurn(state, seatA, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatB.seatId].finalText }) });
-      critique[seatB.seatId] = await this._seatTurn(state, seatB, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatA.seatId].finalText }) });
+      critique[seatA.seatId] = await this._seatTurn(state, seatA, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatB.seatId].finalText, otherDiff: seatDiff[seatB.seatId] }) });
+      critique[seatB.seatId] = await this._seatTurn(state, seatB, 'critique', { prompt: P.critiquePrompt({ task: state.task, otherFinalText: gen[seatA.seatId].finalText, otherDiff: seatDiff[seatA.seatId] }) });
       this._emit(state.runId, { kind: EventKind.CRITIQUE_READY, stage: Stage.CRITIQUE, payload: { seats: Object.keys(critique) } });
     }
 
@@ -301,19 +345,29 @@ export class Application {
     const leaderDir = state.workspaces[leaderSeatId].dir;
 
     // --- INTEGRATE (full mixture only) ---
+    let integrationFailed = false;
     if (hasIntegration(state.preset) && !soleSurvivor) {
       this._saveStage(state, Stage.INTEGRATE);
       const other = state.seats.find((s) => s.seatId !== leaderSeatId);
-      await this._seatTurn(state, leader, 'integrate', {
+      const integ = await this._seatTurn(state, leader, 'integrate', {
         workspaceDir: leaderDir,
         prompt: P.integrationPrompt({
           task: state.task,
           ownFinalText: gen[leaderSeatId].finalText,
           otherFinalText: gen[other.seatId].finalText,
+          otherDiff: seatDiff[other.seatId],
           otherCritique: critique[other.seatId]?.finalText || '(none)',
         }),
       });
-      this._emit(state.runId, { kind: EventKind.INTEGRATION_READY, stage: Stage.INTEGRATE, payload: { leaderSeatId } });
+      // Integration failure must NOT be ignored: only signal readiness on success,
+      // and prevent a failed integration from ever finishing as a clean approve.
+      if (integ.status !== 'ok') {
+        integrationFailed = true;
+        state.integrationFailed = true;
+        this._emit(state.runId, { kind: EventKind.NOTICE, stage: Stage.INTEGRATE, payload: { level: 'error', code: 'integration_failed', message: `integration turn ${integ.status}; result cannot be cleanly approved` } });
+      } else {
+        this._emit(state.runId, { kind: EventKind.INTEGRATION_READY, stage: Stage.INTEGRATE, payload: { leaderSeatId } });
+      }
     }
 
     // Capture the immutable candidate tree from the leader workspace.
@@ -337,16 +391,21 @@ export class Application {
 
     state.review = review;
     state.reviewedTreeOid = reviewedTree;
-    // Review integrity: we read the reviewed artifact bytes from git objects and
-    // bind the verdict to a fresh nonce -> attested for this run.
+    // Review integrity is `attested` ONLY when the verdict was parsed from the nonce
+    // record AND all required evidence bytes were read from git objects (no unread
+    // truncation). Parsing alone is not sufficient.
     state.reviewIntegrity = review && review.attested ? 'attested' : 'unattested';
 
-    // Determine final verdict for the gate. A sole-survivor run never yields a clean
-    // "approve": the cross-critique mixture the product promises did not occur, so the
-    // result is unmistakably UNREVIEWED (the reviewer's findings are still preserved
-    // in state.review for transparency) and creation requires an explicit override.
+    // Determine final verdict for the gate.
     let verdict = review ? review.verdict : Verdict.UNREVIEWED;
+    // A sole-survivor run never yields a clean "approve": the cross-critique mixture
+    // did not occur. The reviewer's findings are preserved in state.review.
     if (soleSurvivor) verdict = Verdict.UNREVIEWED;
+    // A failed integration can never finish as approved.
+    if (integrationFailed) verdict = Verdict.UNREVIEWED;
+    // An approve that is not attested (unread evidence, or verdict not bound to git
+    // objects) must not pass the gate as approved.
+    if (isApproved(verdict) && review && !review.attested) verdict = Verdict.UNREVIEWED;
 
     // --- RESULT GATE (human) ---
     this._saveStage(state, Stage.RESULT_GATE);
@@ -388,6 +447,7 @@ export class Application {
       treeOid: reviewedTree,
       baseOid: state.workspaces[leaderSeatId].base,
       message: `moh result for ${state.runId}\n\nverdict: ${recordVerdict}\nleader: ${leaderSeatId}`,
+      deterministic: this.deterministic,
     });
     state.result = { ...result, verdict: recordVerdict, dir: leaderDir };
     this._emit(state.runId, { kind: EventKind.RESULT_BRANCH_CREATED, stage: Stage.CREATE_RESULT, payload: result });
@@ -405,11 +465,20 @@ export class Application {
       changedManifest: changedForReceipt,
       artifactDigests: digests,
       promptWorkflowDescriptor: P.promptWorkflowDescriptor({ preset: state.preset, task: state.task }),
-      seats: state.seats.map((s) => ({ seatId: s.seatId, label: s.label, adapterId: s.adapterId, harnessId: s.adapterId, provenance: state.provenanceBySeat[s.seatId] || null })),
+      seats: state.seats.map((s) => ({
+        seatId: s.seatId,
+        label: s.label,
+        adapterId: s.adapterId,
+        harnessId: s.adapterId,
+        provenance: state.provenanceBySeat[s.seatId] || null,
+        // Full per-turn provenance so cross-turn model fallback history is durable.
+        turns: (state.turnsBySeat?.[s.seatId] || []).map((t) => ({ turnId: t.turnId, role: t.role, reportedModel: t.provenance.reportedModel, state: t.provenance.state })),
+      })),
       review,
       reviewIntegrity: state.reviewIntegrity,
       decisions: { leaderSeatId, humanOverride: !isApproved(verdict), recordVerdict },
       limitations: soleSurvivor ? ['Sole-survivor run: only one seat produced a solution.'] : [],
+      truncations: state.review?.truncations || [],
     });
     this.store.writeReceipt(state.runId, receipt);
     state.receiptDigest = receipt.receiptDigest;
@@ -418,29 +487,50 @@ export class Application {
     return { status: 'finished', verdict: recordVerdict, result, receiptDigest: receipt.receiptDigest, soleSurvivor };
   }
 
+  /** Evidence (actual changed-file bytes) for a seat, read from git objects. */
+  _seatEvidence(state, seatId) {
+    const ws = state.workspaces[seatId];
+    if (!ws) return '(no workspace)';
+    try {
+      const tree = captureTree(ws.dir);
+      return buildReviewEvidence(ws.dir, ws.base, tree).text;
+    } catch {
+      return '(evidence unavailable)';
+    }
+  }
+
   async _reviewCandidate(state, leader, leaderDir) {
     this._saveStage(state, Stage.REVIEW);
     const challenge = newReviewChallenge();
-    // Summarize changed files from git OBJECTS (symlink-safe), never worktree reads.
-    const changed = changedPaths(leaderDir, state.workspaces[leader.seatId].base, state.candidateTreeOid);
-    const summary = changed.map((c) => `${c.status}\t${c.path}`).join('\n') || '(no changes)';
+    const base = state.workspaces[leader.seatId].base;
+    const candidateTree = state.candidateTreeOid;
+    // Read the ACTUAL candidate bytes from GIT OBJECTS (symlink-safe, immutable),
+    // bounded, recording any truncation explicitly.
+    const evidence = buildReviewEvidence(leaderDir, base, candidateTree);
     const turn = await this._seatTurn(state, leader, 'review', {
       workspaceDir: leaderDir,
-      prompt: P.reviewPrompt({ task: state.task, changedSummary: summary, challenge }),
+      prompt: P.reviewPrompt({ task: state.task, evidence: evidence.text, challenge }),
       reviewChallenge: challenge,
     });
     if (turn.status !== 'ok') {
       this._emit(state.runId, { kind: EventKind.REVIEW_READY, stage: Stage.REVIEW, payload: { verdict: Verdict.UNREVIEWED, reason: `review turn ${turn.status}` } });
-      return { v: 1, verdict: Verdict.UNREVIEWED, summary: `review did not complete (${turn.status})`, findings: [], testsRun: false, limitations: ['review turn failed'], attested: false };
+      return { v: 1, verdict: Verdict.UNREVIEWED, summary: `review did not complete (${turn.status})`, findings: [], testsRun: false, limitations: ['review turn failed'], attested: false, reviewedTreeOid: candidateTree, truncations: evidence.truncated };
     }
     const parsed = parseReview(turn.finalText, challenge);
     if (!parsed.ok) {
       // Injected/ambiguous/malformed output CANNOT become approved.
       this._emit(state.runId, { kind: EventKind.REVIEW_READY, stage: Stage.REVIEW, payload: { verdict: Verdict.UNREVIEWED, reason: parsed.reason } });
-      return { v: 1, verdict: Verdict.UNREVIEWED, summary: `unparseable review: ${parsed.reason}`, findings: [], testsRun: false, limitations: [parsed.reason], attested: false };
+      return { v: 1, verdict: Verdict.UNREVIEWED, summary: `unparseable review: ${parsed.reason}`, findings: [], testsRun: false, limitations: [parsed.reason], attested: false, reviewedTreeOid: candidateTree, truncations: evidence.truncated };
     }
-    const review = { ...parsed.review, attested: true };
-    this._emit(state.runId, { kind: EventKind.REVIEW_READY, stage: Stage.REVIEW, payload: { verdict: review.verdict, summary: review.summary, findings: review.findings } });
+    // Re-verify the candidate tree is still the exact tree whose bytes were reviewed.
+    const stillTree = captureTree(leaderDir);
+    const treeStable = stillTree === candidateTree;
+    // Attested ONLY when: verdict parsed from the nonce record, evidence read from git
+    // objects with NO unread truncation, and the reviewed tree is stable.
+    const attested = treeStable && evidence.truncated.length === 0;
+    const review = { ...parsed.review, attested, reviewedTreeOid: candidateTree, truncations: evidence.truncated };
+    if (evidence.truncated.length) review.limitations = [...review.limitations, `evidence truncated for: ${evidence.truncated.join(', ')} (approval cannot be attested)`];
+    this._emit(state.runId, { kind: EventKind.REVIEW_READY, stage: Stage.REVIEW, payload: { verdict: review.verdict, summary: review.summary, findings: review.findings, attested, truncations: evidence.truncated } });
     return review;
   }
 }

@@ -10,11 +10,16 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { TrustLevel, Readiness, Capability, CapabilityState, capabilityMap, normEvent } from './contract.mjs';
+import { buildChildEnv } from '../process/env-policy.mjs';
 import { executeProcessTurn } from './exec.mjs';
+
+// Probes run with a MINIMAL environment (base allowlist only), never the full parent
+// environment, and never inherit unrelated provider secrets.
+const PROBE_ENV = () => buildChildEnv({}).env;
 
 function onPath(name) {
   try {
-    const p = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8' }).split('\n')[0].trim();
+    const p = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8', env: PROBE_ENV() }).split('\n')[0].trim();
     return p || null;
   } catch {
     return null;
@@ -44,7 +49,7 @@ function resolveExe() {
 function detectFlags(exe) {
   const help = (args) => {
     try {
-      return execFileSync(exe, args, { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'pipe'] });
+      return execFileSync(exe, args, { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'pipe'], env: PROBE_ENV() });
     } catch (e) {
       return (e.stdout || '') + (e.stderr || '');
     }
@@ -119,7 +124,7 @@ export const codexCliAdapter = {
     const exe = resolveExe();
     if (!exe) return { version: null };
     try {
-      const out = execFileSync(exe, ['--version'], { encoding: 'utf8', timeout: 8000 }).trim();
+      const out = execFileSync(exe, ['--version'], { encoding: 'utf8', timeout: 8000, env: PROBE_ENV() }).trim();
       const m = /([0-9]+\.[0-9]+\.[0-9]+)/.exec(out);
       return { version: m ? m[1] : out };
     } catch (e) {

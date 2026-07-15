@@ -15,7 +15,7 @@ const PATTERNS = [
   { name: 'private-key', re: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
 ];
 // This scanner file and the redactor legitimately contain example prefixes.
-const ALLOW_FILES = new Set([join(root, 'scripts', 'secret-scan.mjs'), join(root, 'src', 'security', 'redact.mjs'), join(root, 'test', 'security.test.mjs')]);
+const ALLOW_FILES = new Set([join(root, 'scripts', 'secret-scan.mjs'), join(root, 'src', 'security', 'redact.mjs'), join(root, 'test', 'security.test.mjs'), join(root, 'test', 'review-fixes.test.mjs')]);
 
 let hits = 0;
 function walk(dir) {

@@ -25,8 +25,7 @@
   },
   "scripts": {
     "moh": "node bin/moh.mjs",
-    "test": "node --test test/",
-    "test:unit": "node --test test/unit*.test.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
     "check": "node --check bin/moh.mjs && node scripts/check-syntax.mjs",
     "lint": "node scripts/check-syntax.mjs",
     "demo": "node bin/moh.mjs demo",

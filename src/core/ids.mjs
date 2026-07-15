@@ -31,3 +31,11 @@ export function makeIdFactory({ deterministic = false, seed = 'moh' } = {}) {
 export function isSafeRunId(id) {
   return typeof id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(id) && !id.startsWith('.');
 }
+
+/**
+ * Validate a single path segment (seat id, etc.) before it is joined into a
+ * filesystem path. Rejects traversal (`..`), separators, leading dots, and empties.
+ */
+export function isSafeSegment(id) {
+  return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && !id.includes('..');
+}

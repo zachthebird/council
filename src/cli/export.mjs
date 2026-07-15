@@ -18,6 +18,13 @@ function sanitizeState(state) {
   for (const ws of Object.values(s.workspaces || {})) {
     if (ws.dir) ws.dir = basename(ws.dir);
   }
+  // Absolute paths must not leak in a privacy-safe export.
+  if (s.result && s.result.dir) s.result.dir = '(workspace path omitted)';
+  const scrubProv = (p) => {
+    if (p && p.harnessPath) p.harnessPath = basename(p.harnessPath);
+  };
+  for (const p of Object.values(s.provenanceBySeat || {})) scrubProv(p);
+  for (const turns of Object.values(s.turnsBySeat || {})) for (const t of turns || []) scrubProv(t.provenance);
   return s;
 }
 

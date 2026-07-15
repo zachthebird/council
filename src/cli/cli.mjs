@@ -6,8 +6,9 @@ import { listAdapters, getAdapter } from '../adapters/registry.mjs';
 import { Readiness } from '../adapters/contract.mjs';
 import { Preset } from '../core/state.mjs';
 import { identityLine, effectiveModelLine } from '../core/provenance.mjs';
-import { runsDir, stateDir } from '../storage/paths.mjs';
-import { applyLegacyEnvCompat } from '../storage/migrate.mjs';
+import { runsDir, stateDir, legacyCouncilDirs } from '../storage/paths.mjs';
+import { applyLegacyEnvCompat, scanLegacyCouncil, migrateCouncilRun } from '../storage/migrate.mjs';
+import { loadConfig, configExists } from '../tui/config.mjs';
 import { out, err, heading, kv, table, c } from './ui.mjs';
 import { readPromptInput, parseFlags } from './args.mjs';
 import { doctor } from './doctor.mjs';
@@ -100,9 +101,12 @@ function printHelp() {
 async function cmdDoctor(rest) {
   const flags = parseFlags(rest);
   const report = await doctor();
+  // Doctor is informational diagnostics, not a pass/fail gate — it always exits 0
+  // (the fake harness is always ready and the demo works offline). Scripts read the
+  // `ok` field / per-adapter `readiness` from --json instead of the exit code.
   if (flags.json) {
     out(JSON.stringify(report, null, 2));
-    return report.ok ? 0 : 1;
+    return 0;
   }
   heading('moh doctor — offline diagnostics (no tokens spent)');
   kv('node', report.node);
@@ -116,7 +120,7 @@ async function cmdDoctor(rest) {
   }
   out('');
   out(report.ok ? c.green('doctor: OK — at least one harness is ready.') : c.yellow('doctor: no non-fake harness is ready; the demo still works offline.'));
-  return 0;
+  return 0; // informational: always 0
 }
 
 async function cmdAdapters(rest) {
@@ -224,15 +228,33 @@ async function cmdRun(rest) {
     err('run: no task provided. Use --task, --task-file, or --stdin.');
     return 2;
   }
-  const preset = flags.preset === 'quick-compare' ? Preset.QUICK_COMPARE : Preset.FULL_MIXTURE;
-  const seatA = { seatId: 'seat-a', label: 'Seat A', adapterId: flags['seat-a'] || 'fake', requestedModel: flags['model-a'] || null };
-  const seatB = { seatId: 'seat-b', label: 'Seat B', adapterId: flags['seat-b'] || 'fake', requestedModel: flags['model-b'] || null };
-  // Fake seats need a config to report models deterministically; harmless for real ones.
-  if (seatA.adapterId === 'fake') seatA.adapterConfig = { reportedModel: 'seat-a-model', sessionPrefix: 'a' };
-  if (seatB.adapterId === 'fake') seatB.adapterConfig = { reportedModel: null, sessionPrefix: 'b' };
-  const seed = parseSeed(flags.seed);
+  const cfg = configExists() ? loadConfig() : null;
+  const preset = flags.preset === 'quick-compare' ? Preset.QUICK_COMPARE : cfg?.defaultPreset === 'quick-compare' ? Preset.QUICK_COMPARE : Preset.FULL_MIXTURE;
 
-  const decider = flags.yes || flags.json ? autoDecider() : interactiveDecider();
+  // Prefer saved setup config; flags override per-seat adapter/model.
+  const base = cfg?.seats?.length === 2 ? structuredClone(cfg.seats) : [
+    { seatId: 'seat-a', label: 'Seat A', adapterId: 'fake', adapterConfig: { reportedModel: 'seat-a-model', sessionPrefix: 'a' } },
+    { seatId: 'seat-b', label: 'Seat B', adapterId: 'fake', adapterConfig: { reportedModel: null, sessionPrefix: 'b' } },
+  ];
+  const seatA = { ...base[0], seatId: 'seat-a', label: base[0].label || 'Seat A' };
+  const seatB = { ...base[1], seatId: 'seat-b', label: base[1].label || 'Seat B' };
+  if (flags['seat-a']) seatA.adapterId = flags['seat-a'];
+  if (flags['seat-b']) seatB.adapterId = flags['seat-b'];
+  if (flags['model-a']) seatA.requestedModel = flags['model-a'];
+  if (flags['model-b']) seatB.requestedModel = flags['model-b'];
+  // Only synthesize fake config when a seat is (still) fake and lacks one.
+  if (seatA.adapterId === 'fake' && !seatA.adapterConfig) seatA.adapterConfig = { reportedModel: 'seat-a-model', sessionPrefix: 'a' };
+  if (seatB.adapterId === 'fake' && !seatB.adapterConfig) seatB.adapterConfig = { reportedModel: null, sessionPrefix: 'b' };
+  const seed = parseSeed(flags.seed);
+  if (cfg?.seats?.length === 2 && !flags.json) out(c.dim('using seats from saved setup config'));
+
+  // Only --yes auto-confirms gates. --json without --yes is non-interactive but must
+  // NOT silently create a result branch: it auto-picks a leader (no side effect) and
+  // DECLINES result creation, printing guidance to pass --yes.
+  let decider;
+  if (flags.yes) decider = autoDecider();
+  else if (flags.json) decider = nonConfirmingDecider();
+  else decider = interactiveDecider();
   const app = new Application({ decider });
   app.subscribe((e) => {
     if (flags.json) out(JSON.stringify(e));
@@ -252,6 +274,20 @@ function parseSeed(seed) {
   if (!seed || seed === 'greenfield') return { kind: 'greenfield' };
   if (/^https?:\/\/|^git@/.test(seed)) return { kind: 'url', url: seed };
   return { kind: 'local', path: seed };
+}
+
+// Non-interactive automation (--json without --yes): pick a leader (no side effect)
+// but never auto-create the result branch. Emits guidance instead.
+function nonConfirmingDecider() {
+  return {
+    async chooseLeader(candidates) {
+      return candidates[0].seatId;
+    },
+    async confirmResult() {
+      out(JSON.stringify({ kind: 'gate.result.skipped', payload: { reason: 'non-interactive run without --yes; result branch NOT created. Re-run with --yes to auto-create.' } }));
+      return { confirm: false };
+    },
+  };
 }
 
 function interactiveDecider() {
@@ -280,20 +316,46 @@ function interactiveDecider() {
   };
 }
 
-async function cmdRuns() {
+/** Scan all legacy Council directories and return migrated run records. */
+function scanLegacy() {
+  const out = [];
+  const seen = new Set();
+  for (const dir of legacyCouncilDirs()) {
+    for (const { path, legacy } of scanLegacyCouncil(dir)) {
+      if (!legacy || seen.has(path)) continue;
+      seen.add(path);
+      const res = migrateCouncilRun(legacy, { sourcePath: path });
+      out.push(res.ok ? { ...res.migrated, _path: path } : { runId: '(quarantined)', quarantined: true, reason: res.reason, _path: path });
+    }
+  }
+  return out;
+}
+
+async function cmdRuns(rest = []) {
+  const flags = parseFlags(rest);
   const store = new RunStore();
   const ids = store.list();
-  if (ids.length === 0) {
+  const legacy = scanLegacy();
+  if (ids.length === 0 && legacy.length === 0) {
     out('No runs yet. Try `moh demo`.');
+    return 0;
+  }
+  if (flags.json) {
+    const rows = ids.map((id) => ({ ...store.loadState(id), source: 'moh' }));
+    out(JSON.stringify({ runs: rows, legacy }, null, 2));
     return 0;
   }
   heading('Runs');
   const rows = [];
   for (const id of ids) {
     const s = store.loadState(id);
-    rows.push([id, s?.preset || '—', s?.stage || '—', s?.status || '—', s?.leaderSeatId || '—']);
+    rows.push([id, s?.preset || '—', s?.stage || '—', s?.status || '—', s?.leaderSeatId || '—', 'moh']);
   }
-  table(rows, ['run-id', 'preset', 'stage', 'status', 'leader']);
+  for (const l of legacy) {
+    rows.push([l.runId, l.migratedFrom ? 'council' : '—', l.quarantined ? 'quarantined' : 'migrated', l.verdict || '—', l.leaderSeatId || '—', 'legacy']);
+  }
+  table(rows, ['run-id', 'preset', 'stage/state', 'status/verdict', 'leader', 'source']);
+  if (legacy.length) out('\n' + c.dim(`${legacy.length} legacy Council run(s) are readable via \`moh inspect <run-id>\` (originals never modified).`));
   return 0;
 }
 
@@ -307,6 +369,23 @@ async function cmdInspect(rest) {
   const store = new RunStore();
   const state = store.loadState(runId);
   if (!state) {
+    // Fall back to legacy Council runs (read-only, migrated on the fly).
+    const legacy = scanLegacy().find((l) => l.runId === runId);
+    if (legacy) {
+      if (flags.json) {
+        out(JSON.stringify(legacy, null, 2));
+        return 0;
+      }
+      heading(`Legacy Council run ${runId}`);
+      kv('migrated from', legacy.migratedFrom || 'council');
+      kv('legacy branch', legacy.legacyBranch || '—');
+      kv('verdict', legacy.verdict || 'unknown');
+      kv('review integrity', legacy.reviewIntegrity || 'unattested');
+      heading('Seats (mapped to generic ids)');
+      for (const s of legacy.seats || []) out(`  ${s.seatId} · ${s.label} · adapter ${s.adapterId} · model ${s.provenance?.requestedModel || 'unknown'} (${s.provenance?.state || 'unknown'})`);
+      out('\n' + c.dim('Legacy model provenance is `unknown` (not reconstructed); review integrity `unattested`. Original files unchanged.'));
+      return 0;
+    }
     err(`inspect: run not found: ${runId}`);
     return 1;
   }
@@ -327,6 +406,7 @@ async function cmdInspect(rest) {
 }
 
 async function cmdResume(rest) {
+  const flags = parseFlags(rest);
   const runId = rest.find((a) => !a.startsWith('-'));
   if (!runId) {
     err('resume: run-id required');
@@ -338,16 +418,48 @@ async function cmdResume(rest) {
     err(`resume: run not found: ${runId}`);
     return 1;
   }
-  // Safe recovery: we never silently repeat a paid turn. Report the checkpoint and
-  // let the user decide. Full mid-stage resume of a live harness is P1; here we
-  // surface preserved workspaces and the last durable stage.
+  if (state.status === 'finished') {
+    out(c.dim(`run ${runId} already finished (${state.review?.verdict || 'no verdict'}). Nothing to resume; see \`moh inspect ${runId}\`.`));
+    return 0;
+  }
+
+  // Safe recovery. moh never silently re-bills a completed paid turn: a deliberate
+  // retry starts a FRESH run reconstructed from this run's preserved configuration
+  // (seats/task/seed), leaving the interrupted run's record and workspaces intact.
   heading(`Resume ${runId}`);
   kv('status', state.status);
   kv('last stage', state.stage);
   kv('leader', state.leaderSeatId || '—');
-  out('\n' + c.yellow('Interrupted runs are preserved. Workspaces:'));
+  out('\n' + c.yellow('Interrupted run preserved. Workspaces:'));
   for (const [seatId, ws] of Object.entries(state.workspaces || {})) out(`  ${seatId}: ${ws.dir}`);
-  out('\nRe-run from preserved workspaces with a fresh run, or inspect with `moh inspect ' + runId + '`.');
-  out(c.dim('(Live mid-stage resume of a running harness is a P1 capability; moh will not blindly re-bill a completed turn.)'));
-  return 0;
+
+  const doRetry = flags.retry || flags.yes;
+  if (!doRetry) {
+    out('\nStart a deliberate retry (fresh run, same configuration) with:');
+    out(c.cyan(`  moh resume ${runId} --retry`));
+    out(c.dim('(A retry re-runs from scratch with the same seats/task; it will not reuse a paid session or re-bill a completed turn.)'));
+    return 0;
+  }
+
+  if (!state.task) {
+    err('resume --retry: original task text is not available for this run.');
+    return 1;
+  }
+  out('\n' + c.bold('Deliberate retry — starting a fresh run with the same configuration…'));
+  const decider = flags.yes ? autoDecider() : interactiveDecider();
+  const app = new Application({ decider });
+  app.subscribe((e) => {
+    if (flags.json) out(JSON.stringify(e));
+  });
+  const { runId: newId, state: newState } = await app.createRun({
+    preset: state.preset,
+    task: state.task,
+    seed: state.seed,
+    seats: state.seats,
+    timeoutMs: state.timeoutMs,
+  });
+  out(c.dim(`new run id: ${newId} (original ${runId} preserved)`));
+  const outcome = await app.run(newId);
+  printRunSummary(app.store, newId, newState, outcome);
+  return outcome.status === 'finished' ? 0 : 0;
 }

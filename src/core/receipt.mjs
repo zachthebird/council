@@ -48,6 +48,8 @@ export function buildReceipt({
       adapterId: s.adapterId,
       harnessId: s.harnessId,
       provenance: s.provenance || null,
+      // Per-turn provenance so cross-turn model fallback history is durable in the receipt.
+      turns: Array.isArray(s.turns) ? s.turns : [],
     })),
     review: review || null,
     reviewIntegrity: reviewIntegrity || 'unattested',
