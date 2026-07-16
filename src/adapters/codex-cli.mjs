@@ -112,7 +112,9 @@ function resolveExe() {
     process.env.MOH_CODEX_PATH, // explicit MOH config
     process.env.CODEX_PATH, // env override
     onPath('codex'), // PATH
-    // macOS application-bundled fallback (documented location; only used if present):
+    // macOS application-bundled fallbacks (documented locations; only used if present).
+    // Recent Codex ships inside ChatGPT.app; older standalone builds use Codex.app.
+    '/Applications/ChatGPT.app/Contents/Resources/codex',
     '/Applications/Codex.app/Contents/Resources/codex',
     join(homedir(), '.codex', 'bin', 'codex'),
   ].filter(Boolean);
