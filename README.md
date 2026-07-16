@@ -41,15 +41,17 @@ each agent gets its own clone. URL seeds never push anywhere: results stay in
 the local run workspace.
 
 Requirements: Node >= 22.12, `claude` CLI on PATH and logged in (`claude`
-then `/login`, one time), Codex installed (the app-bundled CLI is found
-automatically). No API keys required — both agents use your existing
-subscriptions. Everything runs locally.
+then `/login`, one time), Codex installed. On macOS the ChatGPT.app-bundled
+CLI (`/Applications/ChatGPT.app/Contents/Resources/codex`) is used by
+default; on other platforms — or with a standalone Codex install — point
+`COUNCIL_CODEX_BIN` at your `codex` binary. No API keys required — both
+agents use your existing subscriptions. Everything runs locally.
 
 ## Controls and safety rails
 
 - **Cancel** any running stage from the GUI; agent processes are terminated.
-- Every agent turn has a hard timeout (`COUNCIL_TURN_TIMEOUT_MS`, default 30
-  minutes).
+- Every agent turn has a hard timeout (`COUNCIL_TURN_TIMEOUT_MS`, default 90
+  minutes — it exists to catch hangs, not to police thoroughness).
 - If one agent fails, the run degrades to a clearly-labeled **UNREVIEWED**
   sole-survivor result instead of dying — the publish gate says so.
 - Runs live in `runs/<id>/` (one git workspace per agent + a replayable event
@@ -81,3 +83,7 @@ on problems that earn it; skip it for routine edits.
 - Diff-based exchange for seed repos (spend the exchange budget on changes,
   not unchanged files).
 - Run picker in the GUI; equalized network policy between the two agents.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

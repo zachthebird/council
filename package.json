@@ -4,6 +4,11 @@
   "description": "Two-model council: Claude and Codex independently solve a prompt, cross-critique, converge under a leader, and publish a peer-reviewed result",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zachthebird/council.git"
+  },
   "scripts": {
     "start": "node server.mjs"
   },
