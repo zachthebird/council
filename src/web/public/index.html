@@ -3,91 +3,1335 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
 <title>Mixture of Harnesses</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #0b0e14; color: #d6deeb; }
-  header { padding: 12px 16px; border-bottom: 1px solid #223; display: flex; align-items: baseline; gap: 12px; }
-  h1 { font-size: 15px; margin: 0; }
-  .tag { color: #8aa; font-size: 12px; }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 16px; }
-  .card { border: 1px solid #223; border-radius: 6px; padding: 10px; background: #0e1420; }
-  .card h2 { font-size: 13px; margin: 0 0 6px; color: #9cf; }
-  .prov { font-size: 12px; color: #9aa; white-space: pre-wrap; }
-  #feed { grid-column: 1 / 3; height: 40vh; overflow: auto; border: 1px solid #223; border-radius: 6px; padding: 8px; background: #080b11; }
-  .ln { white-space: pre-wrap; }
-  .stage { color: #c9a; } .ok { color: #7c7; } .warn { color: #db4; } .err { color: #e66; } .dim { color: #667; }
-  button { font: inherit; background: #1a2536; color: #cde; border: 1px solid #345; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
-  button:hover { background: #24344c; }
-  #gate { grid-column: 1 / 3; }
-  .banner { grid-column: 1 / 3; color: #8aa; font-size: 12px; }
-  code { color: #9cf; }
+  :root {
+    color-scheme: dark;
+    --bg: #090b0f;
+    --panel: #11161e;
+    --panel-raised: #161d27;
+    --line: #2c3543;
+    --line-strong: #46556a;
+    --text: #f4f7fb;
+    --muted: #a5b0bf;
+    --faint: #8794a8;
+    --accent: #83a7ff;
+    --accent-strong: #a9c0ff;
+    --good: #62d6a8;
+    --good-wash: rgba(53, 196, 145, .12);
+    --warn: #f1bd68;
+    --warn-wash: rgba(241, 189, 104, .12);
+    --bad: #ff8f8f;
+    --bad-wash: rgba(255, 111, 111, .12);
+    --radius: 16px;
+    --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+  }
+  * { box-sizing: border-box; }
+  html { min-width: 320px; background: var(--bg); }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background:
+      radial-gradient(circle at 18% -10%, rgba(77, 106, 212, .20), transparent 32rem),
+      radial-gradient(circle at 92% 12%, rgba(39, 142, 128, .10), transparent 28rem),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.55 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  button, input, textarea, select { font: inherit; }
+  button, select, input { min-height: 44px; }
+  button {
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    padding: 10px 15px;
+    background: var(--panel-raised);
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color .16s ease, background .16s ease, transform .16s ease;
+  }
+  button:hover:not(:disabled) { border-color: #71809a; background: #1b2430; }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { cursor: not-allowed; opacity: .46; }
+  button.primary {
+    border-color: #7899f3;
+    background: linear-gradient(180deg, #87a7ff, #6f8fe8);
+    color: #081020;
+    font-weight: 750;
+  }
+  button.primary:hover:not(:disabled) { background: linear-gradient(180deg, #9ab5ff, #7d9cf1); border-color: #a9bdff; }
+  button.ghost { background: transparent; }
+  button.danger { border-color: #a9545c; background: var(--bad-wash); color: #ffc2c2; }
+  button.small { min-height: 40px; padding: 7px 11px; font-size: 13px; }
+  input, textarea, select {
+    width: 100%;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: #0d1219;
+    color: var(--text);
+    padding: 10px 12px;
+    outline: none;
+  }
+  textarea { min-height: 132px; resize: vertical; line-height: 1.5; }
+  input:focus, textarea:focus, select:focus, button:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(131, 167, 255, .22);
+  }
+  input::placeholder, textarea::placeholder { color: #6f7a8b; }
+  label { display: block; color: #dce4ef; font-size: 13px; font-weight: 700; margin-bottom: 7px; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { overflow-wrap: anywhere; }
+  [hidden] { display: none !important; }
+  .topbar {
+    position: sticky;
+    z-index: 20;
+    top: 0;
+    border-bottom: 1px solid rgba(70, 85, 106, .66);
+    background: rgba(9, 11, 15, .86);
+    backdrop-filter: blur(16px);
+  }
+  .topbar-inner {
+    width: min(1180px, calc(100% - 32px));
+    min-height: 66px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .brand-mark {
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid #637bad;
+    border-radius: 10px;
+    background: linear-gradient(145deg, rgba(131, 167, 255, .2), rgba(98, 214, 168, .08));
+  }
+  .brand-mark span { border-radius: 3px; background: var(--accent); }
+  .brand-mark span:nth-child(2), .brand-mark span:nth-child(3) { background: var(--good); }
+  .brand-title { font-size: 15px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
+  .brand-sub { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  .top-actions { display: flex; align-items: center; gap: 10px; }
+  .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 52px 0 80px; }
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(260px, .7fr);
+    gap: 42px;
+    align-items: end;
+    padding: 18px 0 46px;
+  }
+  .eyebrow { color: var(--good); text-transform: uppercase; letter-spacing: .12em; font-size: 12px; font-weight: 800; }
+  h1 { max-width: 780px; margin: 12px 0 16px; font-size: clamp(34px, 5.8vw, 66px); line-height: 1.02; letter-spacing: -.045em; }
+  .hero p { max-width: 760px; margin: 0; color: var(--muted); font-size: clamp(16px, 2vw, 19px); }
+  .trust-note {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+    background: rgba(17, 22, 30, .78);
+  }
+  .trust-note strong { display: block; margin-bottom: 7px; }
+  .trust-note p { color: var(--muted); font-size: 13px; }
+  .section { margin-top: 28px; }
+  .section-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 14px;
+  }
+  .section-heading h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+  .section-heading p { max-width: 690px; margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+  .panel {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(18, 24, 33, .96), rgba(14, 19, 26, .96));
+    box-shadow: var(--shadow);
+  }
+  .connection-grid, .seat-grid, .runtime-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .connection-card {
+    min-width: 0;
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: rgba(16, 22, 30, .86);
+  }
+  .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .card-top h3 { margin: 0; font-size: 16px; }
+  .card-top p { margin: 3px 0 0; color: var(--faint); font-size: 12px; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 28px;
+    padding: 4px 9px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(255,255,255,.025);
+    font-size: 12px;
+    font-weight: 750;
+    white-space: nowrap;
+  }
+  .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .badge.good { border-color: rgba(98, 214, 168, .45); color: #a9efd5; background: var(--good-wash); }
+  .badge.good::before { background: var(--good); box-shadow: 0 0 0 3px rgba(98, 214, 168, .12); }
+  .badge.warn { border-color: rgba(241, 189, 104, .45); color: #f5d49c; background: var(--warn-wash); }
+  .badge.warn::before { background: var(--warn); }
+  .badge.bad { border-color: rgba(255, 143, 143, .4); color: #ffc1c1; background: var(--bad-wash); }
+  .badge.bad::before { background: var(--bad); }
+  .facts { display: grid; gap: 8px; margin: 18px 0; }
+  .fact { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; font-size: 13px; }
+  .fact dt { color: var(--faint); }
+  .fact dd { min-width: 0; margin: 0; color: #dce3ed; overflow-wrap: anywhere; }
+  .model-proof { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: rgba(8, 12, 18, .52); }
+  .model-proof strong { display: block; font-size: 13px; }
+  .model-proof p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  .command-row { display: flex; align-items: center; gap: 9px; margin-top: 12px; }
+  .command-row code {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #090d13;
+    color: #c7d7ff;
+    font-size: 12px;
+  }
+  .setup-panel { padding: 24px; }
+  .form-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(250px, .65fr); gap: 18px; }
+  .field { min-width: 0; }
+  .field + .field { margin-top: 16px; }
+  .field-help { margin: 6px 0 0; color: var(--faint); font-size: 12px; }
+  .source-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; }
+  .seat-grid { margin-top: 18px; }
+  fieldset.seat-card {
+    min-width: 0;
+    margin: 0;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(10, 14, 20, .46);
+  }
+  fieldset.seat-card legend { padding: 0 8px; font-weight: 800; }
+  .two-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .seat-hint { min-height: 36px; margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+  .preflight {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: center;
+    margin-top: 18px;
+    padding: 17px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(10, 14, 20, .55);
+  }
+  .preflight h3 { margin: 0 0 4px; font-size: 14px; }
+  .preflight p { margin: 0; color: var(--muted); font-size: 12px; }
+  .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+  .remember { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-top: 13px; color: var(--muted); font-size: 12px; }
+  .remember input { width: 18px; min-height: 18px; height: 18px; }
+  .error-box { margin-top: 12px; padding: 12px 14px; border: 1px solid rgba(255, 143, 143, .45); border-radius: 10px; background: var(--bad-wash); color: #ffd0d0; font-size: 13px; }
+  .run-panel { overflow: clip; }
+  .run-head { padding: 20px 22px; border-bottom: 1px solid var(--line); }
+  .run-head-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+  .run-head h2 { margin: 0; font-size: 19px; }
+  .run-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  .progress {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+    gap: 6px;
+  }
+  .progress li { min-width: 0; color: var(--faint); font-size: 11px; }
+  .progress-track { height: 4px; margin-bottom: 7px; border-radius: 999px; background: #27303d; }
+  .progress li.active { color: var(--accent-strong); }
+  .progress li.active .progress-track { background: var(--accent); box-shadow: 0 0 12px rgba(131, 167, 255, .32); }
+  .progress li.done { color: #9fdcc6; }
+  .progress li.done .progress-track { background: var(--good); }
+  .run-body { padding: 16px; }
+  .runtime-card { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: #0d1219; }
+  .runtime-card .facts { margin-bottom: 0; }
+  .runtime-card .fact { grid-template-columns: 84px minmax(0, 1fr); }
+  .action-zone {
+    position: sticky;
+    z-index: 5;
+    bottom: 10px;
+    margin: 14px 0;
+    border: 1px solid #5a6d90;
+    border-radius: 14px;
+    padding: 16px;
+    background: rgba(21, 29, 41, .97);
+    box-shadow: 0 16px 40px rgba(0,0,0,.38);
+  }
+  .action-zone h3 { margin: 0 0 6px; font-size: 15px; }
+  .action-zone p { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+  .action-buttons { display: flex; gap: 9px; flex-wrap: wrap; }
+  .candidate { margin: 9px 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #0c1118; }
+  .candidate summary { cursor: pointer; color: #dfe7f2; font-weight: 700; }
+  .candidate pre { max-height: 180px; overflow: auto; white-space: pre-wrap; color: var(--muted); font-size: 12px; }
+  .feed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 2px 8px; }
+  .feed-head h3 { margin: 0; font-size: 13px; }
+  #feed {
+    height: min(420px, 48vh);
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px;
+    background: #080b10;
+    color: #c7d0dc;
+    font: 12px/1.62 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .feed-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .feed-line + .feed-line { margin-top: 3px; }
+  .feed-line.stage { margin-top: 10px; color: #b5c8ff; font-weight: 800; }
+  .feed-line.good { color: #8fe2c2; }
+  .feed-line.warn { color: #f1c675; }
+  .feed-line.bad { color: #ffabab; }
+  .feed-line.dim { color: #7d8998; }
+  .global-status { min-height: 24px; color: var(--muted); font-size: 12px; text-align: right; }
+  .global-status.bad { color: var(--bad); }
+  .global-status.good { color: var(--good); }
+  .history-panel {
+    margin-top: 18px;
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 16px;
+  }
+  .history-panel label { margin: 0 0 3px; }
+  .history-panel p { margin: 0; color: var(--muted); font-size: 12px; }
+  .history-controls { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .history-controls select { width: min(410px, 48vw); }
+  @media (max-width: 880px) {
+    .hero, .form-grid { grid-template-columns: 1fr; gap: 22px; }
+    .hero { padding-top: 4px; }
+    .connection-grid, .seat-grid, .runtime-grid { grid-template-columns: 1fr; }
+    .preflight { grid-template-columns: 1fr; }
+    .form-actions { justify-content: flex-start; }
+  }
+  @media (max-width: 620px) {
+    .topbar-inner, .shell { width: min(100% - 22px, 1180px); }
+    .topbar-inner { min-height: 60px; gap: 10px; }
+    .brand-sub { display: none; }
+    .top-actions .badge { display: none; }
+    .shell { padding-top: 30px; }
+    h1 { font-size: 40px; }
+    .section-heading, .run-head-row { align-items: flex-start; flex-direction: column; }
+    .setup-panel { padding: 15px; }
+    .source-row, .two-fields { grid-template-columns: 1fr; }
+    .progress { grid-template-columns: repeat(3, 1fr); row-gap: 12px; }
+    .fact { grid-template-columns: 76px minmax(0, 1fr); }
+    .command-row { align-items: stretch; flex-direction: column; }
+    .command-row button, .form-actions button { width: 100%; }
+    button.small { min-height: 44px; }
+    .form-actions { flex-direction: column; align-items: stretch; }
+    .history-panel { grid-template-columns: 1fr; align-items: stretch; }
+    .history-controls { align-items: stretch; flex-direction: column; }
+    .history-controls select, .history-controls button { width: 100%; min-width: 0; }
+    #refresh-status { padding-inline: 9px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>Mixture of Harnesses</h1>
-  <span class="tag">One task. Multiple harnesses. Better code. · loopback only · never pushes</span>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand" aria-label="Mixture of Harnesses">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div><div class="brand-title">Mixture of Harnesses</div><div class="brand-sub">One task. Multiple harnesses. Better code.</div></div>
+    </div>
+    <div class="top-actions">
+      <span class="badge" id="network-scope">Checking network scope</span>
+      <button class="ghost small" id="refresh-status" type="button">Refresh status</button>
+    </div>
+  </div>
 </header>
-<main>
-  <div class="banner">Local-first companion. This page uses an HttpOnly capability cookie; no secrets appear in the URL, HTML, or events. Content from harnesses is escaped.</div>
-  <div class="card" id="seat-a"><h2>Seat A</h2><div class="prov dim">idle</div></div>
-  <div class="card" id="seat-b"><h2>Seat B</h2><div class="prov dim">idle</div></div>
-  <div id="gate"></div>
-  <div style="grid-column:1/3"><button id="start">Run deterministic demo</button> <span id="result" class="dim"></span></div>
-  <div id="feed"></div>
+<main class="shell">
+  <section class="hero" aria-labelledby="hero-title">
+    <div>
+      <div class="eyebrow">Local-first coding council</div>
+      <h1 id="hero-title">Know who is doing the work.</h1>
+      <p>Use your own Claude and Codex accounts, choose each seat intentionally, and see the exact requested and runtime-reported model instead of trusting a vague provider label.</p>
+    </div>
+    <aside class="trust-note">
+      <strong>Your credentials stay with the harness.</strong>
+      <p>Mixture of Harnesses asks the official local CLIs whether they are ready. It never asks for your password, OAuth token, or API key in this page.</p>
+    </aside>
+  </section>
+  <div id="global-status" class="global-status" role="status" aria-live="polite">Checking local harnesses…</div>
+  <section class="history-panel panel" aria-labelledby="history-title">
+    <div><label id="history-title" for="run-picker">Run history</label><p id="history-summary">Loading durable local runs…</p></div>
+    <div class="history-controls"><select id="run-picker" aria-label="Select a durable run" disabled><option>No runs yet</option></select><button id="refresh-history" class="ghost small" type="button">Refresh history</button></div>
+  </section>
+  <section class="section" aria-labelledby="setup-title">
+    <div class="section-heading"><div><h2 id="setup-title">Set up a run</h2><p>One task, two independently configured seats. The exact selection below is captured in the run record.</p></div></div>
+    <form id="run-form" class="panel setup-panel" novalidate>
+      <div class="form-grid">
+        <div class="field">
+          <label for="task">What should the council build?</label>
+          <textarea id="task" name="task" required maxlength="65536" placeholder="Describe the outcome, constraints, and what success looks like."></textarea>
+          <p class="field-help">Both seats start independently in isolated workspaces.</p>
+        </div>
+        <div>
+          <div class="field"><label for="preset">Workflow</label><select id="preset" name="preset"><option value="full-mixture">Full mixture · critique + integration</option><option value="quick-compare">Quick compare · fewer turns</option></select></div>
+          <div class="field">
+            <label for="seed-kind">Starting point</label>
+            <div class="source-row"><select id="seed-kind" name="seed-kind"><option value="greenfield">Blank repository</option><option value="local">Local repository</option><option value="url">Git clone URL</option></select><input id="seed-value" name="seed-value" type="text" hidden placeholder="/path/to/repository" /></div>
+            <p id="seed-help" class="field-help">Creates a fresh local Git repository for each seat.</p>
+          </div>
+        </div>
+      </div>
+      <div class="seat-grid">
+        <fieldset class="seat-card" data-seat="0">
+          <legend>Seat A</legend>
+          <div class="field"><label for="seat-a-harness">Harness</label><select id="seat-a-harness" data-role="harness"></select></div>
+          <div class="field"><label for="seat-a-auth">Authorization</label><select id="seat-a-auth" data-role="auth"></select></div>
+          <div class="field"><label for="seat-a-policy">Model policy</label><select id="seat-a-policy" data-role="policy"></select></div>
+          <div class="field" data-role="pinned-wrap" hidden><label for="seat-a-model">Exact model or alias</label><input id="seat-a-model" data-role="model" type="text" maxlength="200" list="seat-a-models" placeholder="Enter the model accepted by this harness" /><datalist id="seat-a-models" data-role="model-list"></datalist></div>
+          <div class="two-fields">
+            <div class="field"><label for="seat-a-effort">Reasoning</label><select id="seat-a-effort" data-role="effort"></select></div>
+            <div class="field" data-role="profile-wrap" hidden><label for="seat-a-profile">CLI profile</label><input id="seat-a-profile" data-role="profile" type="text" maxlength="128" placeholder="Optional" /></div>
+          </div>
+          <p class="seat-hint" data-role="hint"></p>
+        </fieldset>
+        <fieldset class="seat-card" data-seat="1">
+          <legend>Seat B</legend>
+          <div class="field"><label for="seat-b-harness">Harness</label><select id="seat-b-harness" data-role="harness"></select></div>
+          <div class="field"><label for="seat-b-auth">Authorization</label><select id="seat-b-auth" data-role="auth"></select></div>
+          <div class="field"><label for="seat-b-policy">Model policy</label><select id="seat-b-policy" data-role="policy"></select></div>
+          <div class="field" data-role="pinned-wrap" hidden><label for="seat-b-model">Exact model or alias</label><input id="seat-b-model" data-role="model" type="text" maxlength="200" list="seat-b-models" placeholder="Enter the model accepted by this harness" /><datalist id="seat-b-models" data-role="model-list"></datalist></div>
+          <div class="two-fields">
+            <div class="field"><label for="seat-b-effort">Reasoning</label><select id="seat-b-effort" data-role="effort"></select></div>
+            <div class="field" data-role="profile-wrap" hidden><label for="seat-b-profile">CLI profile</label><input id="seat-b-profile" data-role="profile" type="text" maxlength="128" placeholder="Optional" /></div>
+          </div>
+          <p class="seat-hint" data-role="hint"></p>
+        </fieldset>
+      </div>
+      <div class="preflight">
+        <div>
+          <h3 id="preflight-title">Preflight</h3>
+          <p id="preflight-summary">Choose two ready harnesses to continue.</p>
+          <label class="remember"><input id="save-defaults" type="checkbox" checked /> Remember these non-secret seat defaults</label>
+        </div>
+        <div class="form-actions"><button id="demo-run" class="ghost" type="button">Run zero-token demo</button><button id="real-run" class="primary" type="submit" disabled>Run with my accounts</button></div>
+      </div>
+      <div id="run-error" class="error-box" role="alert" hidden></div>
+    </form>
+  </section>
+  <section class="section" aria-labelledby="connections-title">
+    <div class="section-heading"><div><h2 id="connections-title">Connection details</h2><p>Readiness, authorization method, CLI version, and model evidence are separate facts. Refresh after signing in from your terminal.</p></div></div>
+    <div id="connections" class="connection-grid" aria-live="polite"></div>
+  </section>
+  <section id="run-workspace" class="section panel run-panel" aria-labelledby="run-title" hidden>
+    <div class="run-head">
+      <div class="run-head-row"><div><h2 id="run-title">Council run</h2><p id="run-subtitle">Preparing isolated workspaces…</p></div><span id="run-badge" class="badge warn">Starting</span></div>
+      <ol class="progress" aria-label="Run progress">
+        <li data-progress="generate"><div class="progress-track"></div>Generate</li>
+        <li data-progress="critique"><div class="progress-track"></div>Cross-critique</li>
+        <li data-progress="leader_selection"><div class="progress-track"></div>Choose leader</li>
+        <li data-progress="integrate"><div class="progress-track"></div>Integrate</li>
+        <li data-progress="review"><div class="progress-track"></div>Review</li>
+        <li data-progress="result_gate"><div class="progress-track"></div>Local result</li>
+      </ol>
+    </div>
+    <div class="run-body">
+      <div id="runtime-seats" class="runtime-grid"></div>
+      <div id="action-zone" class="action-zone" aria-live="polite" hidden></div>
+      <div class="feed-head"><h3>Activity</h3><button id="clear-feed" type="button" class="ghost small">Clear visible log</button></div>
+      <div id="feed" role="log" aria-label="Run activity" tabindex="0"></div>
+    </div>
+  </section>
 </main>
 <script>
-  // No secrets in JS. Mutations send Origin (implicit) + custom CSRF header; the
-  // capability travels only via the HttpOnly cookie the browser attaches.
-  const feed = document.getElementById('feed');
-  function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-  function line(cls, text){ const d=document.createElement('div'); d.className='ln '+(cls||''); d.textContent=text; feed.appendChild(d); feed.scrollTop=feed.scrollHeight; }
-  function setSeat(id, txt){ const el=document.querySelector('#'+id+' .prov'); if(el){ el.className='prov'; el.textContent=txt; } }
-
-  async function post(path, body){
-    return fetch(path, { method:'POST', headers:{ 'content-type':'application/json', 'x-moh-csrf':'1' }, body: JSON.stringify(body||{}) });
-  }
-
-  const es = new EventSource('/events');
-  es.onmessage = (ev) => {
-    let e; try { e = JSON.parse(ev.data); } catch { return; }
-    switch(e.kind){
-      case 'stage.entered': line('stage', '▸ '+esc(e.payload.stage)); break;
-      case 'seat.turn.started': line('dim', '  '+esc(e.seatId)+' · '+esc(e.payload.role)); break;
-      case 'seat.tool': line('dim', '    tool '+esc(e.payload.name)+(e.payload.summary?' — '+esc(e.payload.summary):'')); break;
-      case 'seat.model.observed': if(e.provenance){ setSeat(e.seatId, provText(e.provenance)); } break;
-      case 'seat.model.mismatch': line('warn', '    ⚠ model mismatch/fallback: '+esc(e.payload.requested)+' → '+esc(e.payload.reported)); break;
-      case 'seat.turn.finished': line('ok', '  ✓ '+esc(e.seatId)); break;
-      case 'seat.turn.failed': line('err', '  ✗ '+esc(e.seatId)+' '+esc(e.payload.message||'')); break;
-      case 'review.ready': line('', '  review verdict: '+esc(e.payload.verdict)); break;
-      case 'result.branch.created': line('ok', '  ★ local result branch: '+esc(e.payload.branch)); break;
-      case 'gate.leader': renderLeaderGate(e.payload); break;
-      case 'gate.result': renderResultGate(e.payload); break;
-      case 'run.done': document.getElementById('result').textContent = 'status: '+esc(e.payload.status); break;
-      case 'run.error': line('err', 'run error: '+esc(e.payload.message)); break;
+  (function () {
+    "use strict";
+    var byId = function (id) { return document.getElementById(id); };
+    var app = { bootstrap: null, adapters: new Map(), activeSeats: [], currentStage: null, runId: null, viewRunId: null, activeRunId: null, running: false, pendingGateId: null, historyLoadVersion: 0, replayLoadingRunId: null, bufferedLiveEvents: [], lastSeqByRun: new Map(), seatsInitialized: false, modelWarningKeys: new Set(), greenfieldConfirmationKey: null, maxFeedLines: 1000 };
+    function make(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined && text !== null) node.textContent = String(text);
+      return node;
     }
-  };
-  function provText(p){
-    const rep = p.reportedModel ? p.reportedModel+' ('+(p.evidenceSource||'runtime')+')' : 'Not reported by harness';
-    return (p.seatLabel||p.seatId)+'\nrequested: '+(p.requestedModel||'Harness default')+'\neffective model: '+rep+'\nauth: '+(p.authLabel||'unknown');
-  }
-  function renderLeaderGate(p){
-    const g = document.getElementById('gate');
-    g.innerHTML = '<div class="card"><h2>Leader selection</h2></div>';
-    const card = g.firstChild;
-    p.candidates.forEach(cd => { const b=document.createElement('button'); b.textContent='Choose '+cd.label; b.onclick=()=>{ post('/api/decision',{id:p.id,value:cd.seatId}); g.innerHTML=''; }; card.appendChild(b); });
-  }
-  function renderResultGate(p){
-    const g = document.getElementById('gate');
-    g.innerHTML = '<div class="card"><h2>Create local result branch</h2><div class="prov">verdict: '+esc(p.verdict)+(p.approved?' (approved)':' (not approved)')+'</div></div>';
-    const card = g.firstChild;
-    const yes=document.createElement('button'); yes.textContent = p.approved ? 'Create local result branch' : 'Override & create (records UNREVIEWED/OVERRIDDEN)';
-    yes.onclick=()=>{ post('/api/decision',{id:p.id,value:{confirm:true,override:!p.approved}}); g.innerHTML=''; };
-    const no=document.createElement('button'); no.textContent='Decline'; no.onclick=()=>{ post('/api/decision',{id:p.id,value:{confirm:false}}); g.innerHTML=''; };
-    card.appendChild(yes); card.appendChild(no);
-  }
-  document.getElementById('start').onclick = () => { feed.innerHTML=''; post('/api/run',{}); };
+    function setGlobalStatus(text, tone) {
+      var node = byId("global-status");
+      node.textContent = text;
+      node.className = "global-status" + (tone ? " " + tone : "");
+    }
+    async function requestJson(path, options) {
+      var response = await fetch(path, options || {});
+      var payload = null;
+      try { payload = await response.json(); } catch (_) { payload = {}; }
+      if (!response.ok || payload.ok === false) {
+        var reason = payload && payload.error && typeof payload.error === "object" ? payload.error.message : payload.error;
+        throw new Error(reason || payload.message || ("Request failed (" + response.status + ")"));
+      }
+      return payload;
+    }
+    function post(path, body) {
+      return requestJson(path, { method: "POST", headers: { "content-type": "application/json", "x-moh-csrf": "1" }, body: JSON.stringify(body || {}) });
+    }
+    function availableAuthModes(adapter) {
+      var auth = adapter && (adapter.auth || adapter.authInstructions) || {};
+      return (auth.modes || []).filter(function (mode) { return mode.available !== false && mode.disabled !== true; });
+    }
+    function operationallyReady(adapter) {
+      if (!adapter || !["ready", "needs_login"].includes(adapter.readiness)) return false;
+      return adapter.readiness === "ready" || availableAuthModes(adapter).some(function (mode) { return Array.isArray(mode.envNames) && mode.envNames.length > 0; });
+    }
+    function adapterTone(adapter) {
+      if (operationallyReady(adapter)) return "good";
+      if (adapter.readiness === "needs_login" || adapter.readiness === "experimental") return "warn";
+      return "bad";
+    }
+    function readinessLabel(readiness) {
+      return { ready: "Ready", needs_login: "Needs login", missing: "Not installed", experimental: "Experimental", blocked: "Blocked", probe_failed: "Check failed", unavailable: "Unavailable" }[readiness] || "Unknown";
+    }
+    function adapterReadinessLabel(adapter) {
+      if (adapter.readiness === "ready") return "Ready";
+      if (operationallyReady(adapter)) return "Ready via environment";
+      return readinessLabel(adapter.readiness);
+    }
+    function adapterAuthLabel(adapter) {
+      if (adapter.readiness !== "ready" && operationallyReady(adapter)) return "Explicit environment authorization available";
+      return adapter.authLabel || adapter.authenticationStatus || "Not verified";
+    }
+    function authModeLabel(adapter, modeId) {
+      var auth = adapter && (adapter.auth || adapter.authInstructions) || {};
+      var mode = (auth.modes || []).find(function (candidate) { return candidate.id === modeId; });
+      return mode ? mode.label : adapterAuthLabel(adapter || {});
+    }
+    function primaryReadyCount() {
+      return safeAdapters().filter(function (adapter) { return ["claude-code", "codex-cli"].includes(adapter.id) && operationallyReady(adapter); }).length;
+    }
+    function scopePrefix() { return app.bootstrap && app.bootstrap.exposed ? "EXPOSED BINDING · " : ""; }
+    function safeAdapters() { return (app.bootstrap && app.bootstrap.adapters) || []; }
+    function catalogFor(adapter) { return adapter && adapter.modelCatalog && Array.isArray(adapter.modelCatalog.models) ? adapter.modelCatalog : null; }
+    function catalogIsCurrent(adapter) {
+      var catalog = catalogFor(adapter);
+      if (!catalog) return false;
+      if (adapter.id === "codex-cli") return /refreshed/i.test(catalog.source || "");
+      return true;
+    }
+    function frontierFor(adapter) {
+      var catalog = catalogFor(adapter);
+      return catalog && catalogIsCurrent(adapter) ? (catalog.models.find(function (model) { return model.frontier === true; }) || null) : null;
+    }
+    function commandButton(command) {
+      var row = make("div", "command-row");
+      var code = make("code", "", command);
+      var button = make("button", "ghost small", "Copy command");
+      button.type = "button";
+      button.addEventListener("click", async function () {
+        try {
+          await navigator.clipboard.writeText(command);
+          button.textContent = "Copied";
+          setTimeout(function () { button.textContent = "Copy command"; }, 1400);
+        } catch (_) {
+          setGlobalStatus("Copy was blocked. Select the visible command instead.", "bad");
+        }
+      });
+      row.append(code, button);
+      return row;
+    }
+    function renderConnections() {
+      var root = byId("connections");
+      root.replaceChildren();
+      var preferred = ["claude-code", "codex-cli"];
+      var adapters = safeAdapters().filter(function (a) { return preferred.includes(a.id); });
+      adapters.sort(function (a, b) { return preferred.indexOf(a.id) - preferred.indexOf(b.id); });
+      adapters.forEach(function (adapter) {
+        var card = make("article", "connection-card");
+        var top = make("div", "card-top");
+        var titleBox = make("div");
+        titleBox.append(make("h3", "", adapter.displayName), make("p", "", adapter.provider && adapter.provider !== "unknown" ? ("Inference route: " + adapter.provider) : "Inference route: Not reported"));
+        top.append(titleBox, make("span", "badge " + adapterTone(adapter), adapterReadinessLabel(adapter)));
+        card.append(top);
+        var facts = make("dl", "facts");
+        [["Authorization", adapterAuthLabel(adapter)], ["CLI version", adapter.version || "Not detected"], ["Executable", adapter.path || "Not detected"]].forEach(function (item) {
+          var row = make("div", "fact");
+          row.append(make("dt", "", item[0]), make("dd", item[0] === "Executable" ? "mono" : "", item[1]));
+          facts.append(row);
+        });
+        card.append(facts);
+        var proof = make("div", "model-proof");
+        var frontier = frontierFor(adapter);
+        if (frontier) {
+          proof.append(make("strong", "", "Latest frontier · verified by installed CLI"), make("p", "", frontier.slug + " · catalog checked " + formatTime(adapter.modelCatalog.checkedAt)));
+        } else if (adapter.id === "claude-code") {
+          proof.append(make("strong", "", "Runtime verification"), make("p", "", "This Claude CLI does not expose an offline model catalog. The exact effective model will appear when the harness reports it during a turn."));
+        } else if (adapter.id === "codex-cli" && catalogFor(adapter)) {
+          var bundledCandidate = catalogFor(adapter).models.find(function (model) { return model.frontier === true; });
+          proof.append(make("strong", "", "Current catalog not verified"), make("p", "", (bundledCandidate ? (bundledCandidate.slug + " appears in the bundled catalog, but ") : "") + "the signed-in catalog refresh failed. Latest-frontier selection is disabled until Refresh status verifies it."));
+        } else {
+          proof.append(make("strong", "", "Model catalog unavailable"), make("p", "", "Choose a model explicitly or use the harness default. No latest-model claim will be shown."));
+        }
+        card.append(proof);
+        var auth = adapter.auth || adapter.authInstructions || {};
+        var command = auth.loginCommand;
+        if (adapter.readiness !== "ready" && command) card.append(commandButton(command));
+        else if (auth.statusCommand) card.append(commandButton(auth.statusCommand));
+        if (adapter.detail) card.append(make("p", "field-help", adapter.detail));
+        root.append(card);
+      });
+    }
+    function fillSelect(select, options, selected) {
+      select.replaceChildren();
+      options.forEach(function (option) {
+        var node = make("option", "", option.label);
+        node.value = option.value;
+        if (option.disabled) node.disabled = true;
+        if (String(option.value) === String(selected)) node.selected = true;
+        select.append(node);
+      });
+    }
+    function defaultSeats() {
+      var savedContainer = app.bootstrap && (app.bootstrap.config || app.bootstrap.defaults || app.bootstrap.savedConfig);
+      var saved = savedContainer && savedContainer.seats;
+      if (Array.isArray(saved) && saved.length === 2) return saved;
+      return [
+        { seatId: "seat-a", label: "Seat A", adapterId: "claude-code", authMode: "delegated", modelPolicy: "harness_default", requestedModel: null },
+        { seatId: "seat-b", label: "Seat B", adapterId: "codex-cli", authMode: "delegated", modelPolicy: frontierFor(app.adapters.get("codex-cli")) ? "catalog_frontier" : "harness_default", requestedModel: null }
+      ];
+    }
+    function seatNode(index) { return document.querySelector('fieldset[data-seat="' + index + '"]'); }
+    function seatDrafts() {
+      if (!app.seatsInitialized) return null;
+      return [0, 1].map(function (index) {
+        var root = seatNode(index);
+        return {
+          adapterId: root.querySelector('[data-role="harness"]').value,
+          authMode: root.querySelector('[data-role="auth"]').value,
+          modelPolicy: root.querySelector('[data-role="policy"]').value,
+          requestedModel: root.querySelector('[data-role="model"]').value,
+          requestedEffort: root.querySelector('[data-role="effort"]').value,
+          profile: root.querySelector('[data-role="profile"]').value
+        };
+      });
+    }
+    function initializeSeats(draft) {
+      var adapterOptions = safeAdapters().filter(function (a) { return ["claude-code", "codex-cli", "fake"].includes(a.id); }).map(function (a) {
+        var auth = a.auth || a.authInstructions || {};
+        var anyAuthAvailable = (auth.modes || []).some(function (mode) { return mode.available !== false && mode.disabled !== true; });
+        var unavailable = !["ready", "experimental"].includes(a.readiness) && a.id !== "fake" && !anyAuthAvailable;
+        return { value: a.id, label: a.displayName + " · " + adapterReadinessLabel(a), disabled: unavailable };
+      });
+      var saved = Array.isArray(draft) && draft.length === 2 ? draft : defaultSeats();
+      [0, 1].forEach(function (index) {
+        var root = seatNode(index);
+        var harness = root.querySelector('[data-role="harness"]');
+        fillSelect(harness, adapterOptions, saved[index].adapterId);
+        if (!app.seatsInitialized) {
+          harness.addEventListener("change", function () { configureSeatControls(index, null); syncPreflight(); });
+          root.querySelector('[data-role="auth"]').addEventListener("change", syncPreflight);
+          root.querySelector('[data-role="policy"]').addEventListener("change", function () { updateModelPolicy(index); syncPreflight(); });
+          root.querySelector('[data-role="model"]').addEventListener("input", function () { updateModelPolicy(index); syncPreflight(); });
+          root.querySelector('[data-role="effort"]').addEventListener("change", syncPreflight);
+          root.querySelector('[data-role="profile"]').addEventListener("input", function () { updateModelPolicy(index); syncPreflight(); });
+        }
+        configureSeatControls(index, saved[index]);
+      });
+      app.seatsInitialized = true;
+    }
+    function configureSeatControls(index, saved) {
+      var root = seatNode(index);
+      var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+      if (!adapter) return;
+      var auth = adapter.auth || adapter.authInstructions || {};
+      var authModes = auth.modes || [{ id: "delegated", label: "Harness-managed login" }];
+      fillSelect(root.querySelector('[data-role="auth"]'), authModes.map(function (mode) {
+        var unavailable = mode.available === false;
+        var suffix = unavailable ? " · not available in this process" : mode.readiness && mode.readiness !== "ready" && mode.readiness !== "not_required" ? " · " + readinessLabel(mode.readiness) : "";
+        return { value: mode.id, label: mode.label + suffix, disabled: mode.disabled === true || unavailable };
+      }), saved && saved.authMode);
+      var policies = [{ value: "harness_default", label: "Harness default · verify at runtime" }];
+      var frontier = frontierFor(adapter);
+      if (frontier) policies.push({ value: "catalog_frontier", label: "Latest frontier · " + frontier.slug });
+      policies.push({ value: "pinned", label: "Pin an exact model or alias" });
+      var savedPolicy = saved && saved.modelPolicy;
+      if (!savedPolicy && saved && saved.requestedModel) savedPolicy = "pinned";
+      fillSelect(root.querySelector('[data-role="policy"]'), policies, savedPolicy || (frontier ? "catalog_frontier" : "harness_default"));
+      root.querySelector('[data-role="model"]').value = (saved && saved.requestedModel) || "";
+      var modelList = root.querySelector('[data-role="model-list"]');
+      modelList.replaceChildren();
+      if (catalogFor(adapter)) catalogFor(adapter).models.forEach(function (model) {
+        var option = document.createElement("option");
+        option.value = model.slug;
+        option.label = model.displayName || model.description || model.slug;
+        modelList.append(option);
+      });
+      var profileWrap = root.querySelector('[data-role="profile-wrap"]');
+      profileWrap.hidden = adapter.id !== "codex-cli" || !adapter.capabilities || adapter.capabilities.provider_selection !== "supported";
+      root.querySelector('[data-role="profile"]').value = profileWrap.hidden ? "" : (saved && saved.profile) || "";
+      updateModelPolicy(index, saved && saved.requestedEffort);
+    }
+    function catalogModelForSeat(index, adapter, policy) {
+      var root = seatNode(index);
+      if (!adapter) return null;
+      if (adapter.id === "codex-cli" && root.querySelector('[data-role="profile"]').value.trim()) return null;
+      var catalog = catalogFor(adapter);
+      if (!catalog) return null;
+      if (policy === "catalog_frontier") return frontierFor(adapter);
+      if (policy !== "pinned") return null;
+      var requested = root.querySelector('[data-role="model"]').value.trim();
+      return catalog.models.find(function (model) { return model.slug === requested; }) || null;
+    }
+    function updateEffortOptions(index, preferred) {
+      var root = seatNode(index);
+      var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+      var policy = root.querySelector('[data-role="policy"]').value;
+      var select = root.querySelector('[data-role="effort"]');
+      var selected = preferred !== undefined && preferred !== null ? preferred : select.value;
+      var model = catalogModelForSeat(index, adapter, policy);
+      var supported = model && Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts : [];
+      var options = [{ value: "", label: "Harness default" }];
+      supported.forEach(function (effort) {
+        var id = typeof effort === "string" ? effort : (effort && (effort.effort || effort.id));
+        if (id) options.push({ value: id, label: id + " · verified for " + model.slug });
+      });
+      fillSelect(select, options, selected);
+    }
+    function updateModelPolicy(index, preferredEffort) {
+      var root = seatNode(index);
+      var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+      var policySelect = root.querySelector('[data-role="policy"]');
+      var profile = root.querySelector('[data-role="profile"]').value.trim();
+      var profileScoped = adapter && adapter.id === "codex-cli" && !!profile;
+      var frontierOption = policySelect.querySelector('option[value="catalog_frontier"]');
+      if (frontierOption) frontierOption.disabled = profileScoped;
+      if (profileScoped && policySelect.value === "catalog_frontier") policySelect.value = "harness_default";
+      var policy = policySelect.value;
+      root.querySelector('[data-role="pinned-wrap"]').hidden = policy !== "pinned";
+      var hint = root.querySelector('[data-role="hint"]');
+      var frontier = frontierFor(adapter);
+      updateEffortOptions(index, preferredEffort);
+      if (profileScoped) {
+        hint.textContent = "Codex will be invoked with profile “" + profile + "”. This CLI cannot expose a profile-scoped model catalog, so latest-frontier and custom reasoning claims are disabled; use a pinned model or harness default and verify the runtime report.";
+        return;
+      }
+      if (policy === "catalog_frontier" && frontier) {
+        hint.textContent = "Verified from " + adapter.modelCatalog.source + " at " + formatTime(adapter.modelCatalog.checkedAt) + ". Exact slug: " + frontier.slug + ".";
+      } else if (policy === "pinned") {
+        hint.textContent = catalogModelForSeat(index, adapter, policy)
+          ? "Pinned to an exact catalog entry. Reasoning choices are limited to that model's reported support; runtime must still confirm the effective model."
+          : "Pinned for reproducibility. This value is not an exact catalog match, so reasoning stays at harness default and runtime must confirm the effective model.";
+      } else {
+        hint.textContent = adapter && adapter.id === "claude-code" ? "Claude chooses its configured default. The exact model stays unverified until the runtime stream reports it." : "The harness chooses its configured default. No latest-model claim is made.";
+      }
+    }
+    function updateSeed() {
+      var kind = byId("seed-kind").value;
+      var input = byId("seed-value");
+      var help = byId("seed-help");
+      input.hidden = kind === "greenfield";
+      input.placeholder = kind === "url" ? "https://github.com/owner/repository.git" : "/path/to/repository";
+      help.textContent = kind === "greenfield" ? "Creates a fresh local Git repository for each seat." : kind === "url" ? "Clones the public or locally authorized repository into isolated workspaces. Credential-bearing URLs are rejected." : "Copies from a local Git repository into isolated workspaces.";
+      syncPreflight();
+    }
+    function selectedModel(index) {
+      var root = seatNode(index);
+      var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+      var policy = root.querySelector('[data-role="policy"]').value;
+      if (policy === "catalog_frontier") {
+        if (adapter && adapter.id === "codex-cli" && root.querySelector('[data-role="profile"]').value.trim()) return null;
+        var frontier = frontierFor(adapter);
+        return frontier ? frontier.slug : null;
+      }
+      if (policy === "pinned") return root.querySelector('[data-role="model"]').value.trim() || null;
+      return null;
+    }
+    function seatReady(index) {
+      var root = seatNode(index);
+      var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+      if (!adapter) return false;
+      var selectedAuth = root.querySelector('[data-role="auth"]').selectedOptions[0];
+      if (!selectedAuth || selectedAuth.disabled) return false;
+      var policy = root.querySelector('[data-role="policy"]').value;
+      if (policy === "pinned" && !selectedModel(index)) return false;
+      if (policy === "catalog_frontier" && !frontierFor(adapter)) return false;
+      return true;
+    }
+    function syncPreflight() {
+      if (!app.bootstrap) return;
+      var runBusy = app.running || !!app.activeRunId;
+      var taskOk = byId("task").value.trim().length > 0;
+      var seedKind = byId("seed-kind").value;
+      var seedOk = seedKind === "greenfield" || byId("seed-value").value.trim().length > 0;
+      var seatsOk = seatReady(0) && seatReady(1);
+      var seatNames = [0, 1].map(function (index) {
+        var root = seatNode(index);
+        var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+        return (adapter ? adapter.displayName : "Unknown") + " / " + (selectedModel(index) || "harness default");
+      });
+      byId("preflight-summary").textContent = seatsOk ? seatNames.join("  ·  ") + ". Credential values stay outside moh—in the official CLI store or selected process environment." : "A selected harness needs login, installation, or a valid model choice. See Connection details below, then refresh status after fixing it.";
+      byId("demo-run").disabled = runBusy;
+      byId("real-run").disabled = runBusy || !taskOk || !seedOk || !seatsOk;
+    }
+    function readSeat(index) {
+      var root = seatNode(index);
+      var adapter = app.adapters.get(root.querySelector('[data-role="harness"]').value);
+      var policy = root.querySelector('[data-role="policy"]').value;
+      var model = selectedModel(index);
+      return {
+        seatId: index === 0 ? "seat-a" : "seat-b",
+        label: index === 0 ? "Seat A" : "Seat B",
+        adapterId: adapter.id,
+        authMode: root.querySelector('[data-role="auth"]').value,
+        modelPolicy: policy,
+        requestedModel: model,
+        requestedEffort: root.querySelector('[data-role="effort"]').value || null,
+        profile: root.querySelector('[data-role="profile-wrap"]').hidden ? null : root.querySelector('[data-role="profile"]').value.trim() || null,
+        permissionMode: adapter.id === "claude-code" ? "acceptEdits" : null,
+        sandbox: adapter.id === "codex-cli" && adapter.capabilities && adapter.capabilities.sandbox_controls === "supported" ? "workspace-write" : "unknown"
+      };
+    }
+    function readSeed() {
+      var kind = byId("seed-kind").value;
+      var value = byId("seed-value").value.trim();
+      if (kind === "greenfield") return { kind: "greenfield" };
+      if (kind === "url") return { kind: "url", url: value };
+      return { kind: "local", path: value };
+    }
+    function prepareRunUi(seats, subtitle) {
+      app.historyLoadVersion += 1;
+      app.replayLoadingRunId = null;
+      app.bufferedLiveEvents = [];
+      app.activeSeats = seats;
+      app.running = true;
+      app.activeRunId = "starting";
+      app.currentStage = null;
+      app.runId = null;
+      app.viewRunId = null;
+      app.pendingGateId = null;
+      app.modelWarningKeys.clear();
+      byId("run-workspace").hidden = false;
+      byId("run-subtitle").textContent = subtitle || "Preparing isolated workspaces…";
+      byId("run-badge").className = "badge warn";
+      byId("run-badge").textContent = "Starting";
+      byId("feed").replaceChildren();
+      byId("action-zone").hidden = true;
+      renderRuntimeSeats();
+      updateProgress(null);
+      syncPreflight();
+      byId("run-workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    function renderRuntimeSeats() {
+      var root = byId("runtime-seats");
+      root.replaceChildren();
+      app.activeSeats.forEach(function (seat) {
+        var adapter = app.adapters.get(seat.adapterId) || {};
+        var card = make("article", "runtime-card");
+        card.id = "runtime-" + seat.seatId;
+        var top = make("div", "card-top");
+        var names = make("div");
+        names.append(make("h3", "", seat.label), make("p", "", adapter.displayName || seat.adapterId));
+        var status = make("span", "badge", "Queued");
+        status.dataset.role = "status";
+        top.append(names, status);
+        card.append(top);
+        var facts = make("dl", "facts");
+        [["Provider", seat.provider || adapter.provider || "unknown", "provider"], ["Requested", seat.requestedModel || "Harness default", "requested"], ["Configured", seat.configuredModel || "Not reported by offline config", "configured"], ["Effective", "Not reported yet", "effective"], ["Evidence", seat.modelPolicy === "catalog_frontier" ? "Fresh provider catalog selection; awaiting runtime" : "Waiting for runtime", "evidence"], ["Authorization", seat.authLabel || authModeLabel(adapter, seat.authMode), "auth"]].forEach(function (item) {
+          var row = make("div", "fact");
+          var dd = make("dd", item[0] === "Requested" || item[0] === "Effective" ? "mono" : "", item[1]);
+          dd.dataset.role = item[2];
+          row.append(make("dt", "", item[0]), dd);
+          facts.append(row);
+        });
+        card.append(facts);
+        root.append(card);
+      });
+    }
+    function updateRuntimeSeat(seatId, provenance, statusText, tone) {
+      var card = byId("runtime-" + seatId);
+      if (!card) return;
+      var status = card.querySelector('[data-role="status"]');
+      status.textContent = statusText || "Working";
+      status.className = "badge" + (tone ? " " + tone : "");
+      if (!provenance) return;
+      card.querySelector('[data-role="provider"]').textContent = provenance.provider || "unknown";
+      card.querySelector('[data-role="requested"]').textContent = provenance.requestedModel || "Harness default";
+      card.querySelector('[data-role="configured"]').textContent = provenance.configuredModel || "Not reported by offline config";
+      card.querySelector('[data-role="effective"]').textContent = provenance.reportedModel || "Not reported by harness";
+      card.querySelector('[data-role="evidence"]').textContent = provenance.reportedModel
+        ? ((provenance.evidenceSource || "runtime") + (provenance.state === "mismatch_or_fallback" ? " · fallback/remap detected" : ""))
+        : provenance.modelCatalogSource
+          ? provenance.modelCatalogSource + (provenance.modelCatalogCheckedAt ? " · checked " + formatTime(provenance.modelCatalogCheckedAt) : "") + " · runtime not reported"
+          : "No runtime model evidence";
+      card.querySelector('[data-role="auth"]').textContent = provenance.authLabel || "authentication unknown";
+    }
+    function addFeed(text, tone) {
+      var feed = byId("feed");
+      var nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 72;
+      feed.append(make("div", "feed-line" + (tone ? " " + tone : ""), text));
+      while (feed.childElementCount > app.maxFeedLines) feed.firstElementChild.remove();
+      if (nearBottom) feed.scrollTop = feed.scrollHeight;
+    }
+    function updateProgress(stage) {
+      var order = ["generate", "critique", "leader_selection", "integrate", "review", "result_gate"];
+      var aliases = { revise: "review", create_result: "result_gate", finished: "result_gate" };
+      var current = aliases[stage] || stage;
+      var index = order.indexOf(current);
+      document.querySelectorAll("[data-progress]").forEach(function (item) {
+        var itemIndex = order.indexOf(item.dataset.progress);
+        item.classList.toggle("active", itemIndex === index);
+        item.classList.toggle("done", index >= 0 && itemIndex < index);
+      });
+    }
+    function stageLabel(stage) {
+      return { generate: "Generating independent solutions", critique: "Cross-critiquing solutions", leader_selection: "Waiting for your leader choice", integrate: "Leader integrating the strongest work", review: "Reviewing the candidate tree", revise: "Revising review findings", result_gate: "Waiting for your result decision", create_result: "Creating the local result branch", finished: "Run finished", failed: "Run failed" }[stage] || stage;
+    }
+    function showAction(title, description) {
+      var zone = byId("action-zone");
+      byId("run-workspace").hidden = false;
+      app.running = true;
+      zone.replaceChildren(make("h3", "", title), make("p", "", description));
+      zone.hidden = false;
+      return zone;
+    }
+    async function decide(id, value, buttons) {
+      buttons.forEach(function (button) { button.disabled = true; });
+      try {
+        await post("/api/decision", { id: id, value: value });
+        app.pendingGateId = null;
+        byId("action-zone").hidden = true;
+        byId("run-badge").textContent = "Working";
+        byId("run-badge").className = "badge warn";
+      } catch (error) {
+        buttons.forEach(function (button) { button.disabled = false; });
+        showRunError(error.message);
+      }
+    }
+    function renderLeaderGate(payload) {
+      var zone = showAction("Your choice: pick the leader", "Review both candidate summaries. The chosen seat will integrate the strongest result.");
+      var buttons = [];
+      (payload.candidates || []).forEach(function (candidate) {
+        var details = make("details", "candidate");
+        details.append(make("summary", "", candidate.label || candidate.seatId), make("pre", "", candidate.output || "No candidate summary was provided."));
+        zone.append(details);
+        var button = make("button", "primary", "Choose " + (candidate.label || candidate.seatId));
+        button.type = "button";
+        button.addEventListener("click", function () { decide(payload.id, candidate.seatId, buttons); });
+        buttons.push(button);
+      });
+      var row = make("div", "action-buttons");
+      buttons.forEach(function (button) { row.append(button); });
+      zone.append(row);
+      byId("run-badge").textContent = "Action required";
+      byId("run-badge").className = "badge warn";
+    }
+    function renderResultGate(payload) {
+      var approved = payload.approved === true;
+      var zone = showAction(approved ? "Review approved" : "Review did not approve this result", approved ? "The reviewed tree is ready to become a local branch. Mixture of Harnesses never pushes it." : "The safe default is to keep the work without creating a result branch. An override is recorded as UNREVIEWED/OVERRIDDEN.");
+      var review = payload.review;
+      if (review) {
+        zone.append(make("p", "", "Review summary: " + (review.summary || "No summary reported.") + " Tests run: " + (review.testsRun ? "yes" : "not confirmed") + "."));
+        var reviewDetails = make("details", "candidate");
+        var findings = Array.isArray(review.findings) ? review.findings : [];
+        var limitations = Array.isArray(review.limitations) ? review.limitations : [];
+        reviewDetails.append(make("summary", "", "Review evidence · " + findings.length + " finding" + (findings.length === 1 ? "" : "s")), make("pre", "", findings.length || limitations.length
+          ? findings.map(function (finding) { return "[" + (finding.severity || "info") + "] " + (finding.path ? finding.path + " · " : "") + finding.message; }).concat(limitations.map(function (item) { return "[limitation] " + item; })).join("\n")
+          : "No findings or limitations were reported."));
+        zone.append(reviewDetails);
+      }
+      var changed = Array.isArray(payload.changed) ? payload.changed : [];
+      var changedTotal = Number.isInteger(payload.changedTotal) ? payload.changedTotal : changed.length;
+      var changedDetails = make("details", "candidate");
+      changedDetails.open = !approved;
+      changedDetails.append(make("summary", "", "Changed files · " + changedTotal), make("pre", "", changed.length
+        ? changed.map(function (item) { return (item.status || "?") + "  " + item.path; }).join("\n") + (payload.changedTruncated ? "\n…additional paths omitted from this view" : "")
+        : "No tracked file changes were reported."));
+      zone.append(changedDetails);
+      var row = make("div", "action-buttons");
+      var safe = make("button", "primary", approved ? "Create local result branch" : "Do not create a branch");
+      var other = make("button", approved ? "ghost" : "danger", approved ? "Decline" : "Review override…");
+      safe.type = other.type = "button";
+      row.append(safe, other);
+      zone.append(row);
+      if (approved) {
+        safe.addEventListener("click", function () { decide(payload.id, { confirm: true, override: false }, [safe, other]); });
+        other.addEventListener("click", function () { decide(payload.id, { confirm: false }, [safe, other]); });
+      } else {
+        safe.addEventListener("click", function () { decide(payload.id, { confirm: false }, [safe, other]); });
+        other.addEventListener("click", function () {
+          var confirmText = make("p", "", "Confirming creates a local branch despite verdict: " + (payload.verdict || "UNREVIEWED") + ".");
+          var confirm = make("button", "danger", "Confirm override and create");
+          var cancel = make("button", "ghost", "Cancel override");
+          confirm.type = cancel.type = "button";
+          var confirmRow = make("div", "action-buttons");
+          confirmRow.append(confirm, cancel);
+          zone.append(confirmText, confirmRow);
+          other.disabled = true;
+          confirm.addEventListener("click", function () { decide(payload.id, { confirm: true, override: true }, [safe, other, confirm, cancel]); });
+          cancel.addEventListener("click", function () { confirmText.remove(); confirmRow.remove(); other.disabled = false; });
+        });
+      }
+      byId("run-badge").textContent = "Action required";
+      byId("run-badge").className = "badge warn";
+    }
+    function finishRun(status, message) {
+      app.running = false;
+      app.pendingGateId = null;
+      var labels = { finished: "Finished", declined: "No branch created", not_created: "No branch created", blocked: "Blocked", failed: "Failed" };
+      byId("run-badge").textContent = labels[status] || status;
+      byId("run-badge").className = "badge " + (status === "finished" ? "good" : ["declined", "not_created"].includes(status) ? "warn" : "bad");
+      byId("run-subtitle").textContent = message || ("Run " + status + ".");
+      byId("action-zone").hidden = true;
+      syncPreflight();
+    }
+    function handleEvent(event) {
+      var payload = event.payload || {};
+      switch (event.kind) {
+        case "run.id":
+          app.runId = payload.runId;
+          app.viewRunId = payload.runId;
+          app.activeRunId = payload.runId;
+          app.running = true;
+          byId("run-subtitle").textContent = "Run " + payload.runId + " · local only";
+          syncPreflight();
+          break;
+        case "run.started": addFeed("Run started · " + (payload.preset || "workflow"), "stage"); break;
+        case "stage.entered":
+          app.currentStage = payload.stage || event.stage;
+          updateProgress(app.currentStage);
+          byId("run-subtitle").textContent = stageLabel(app.currentStage);
+          byId("run-badge").textContent = ["leader_selection", "result_gate"].includes(app.currentStage) ? "Action required" : "Working";
+          addFeed("▸ " + stageLabel(app.currentStage), "stage");
+          break;
+        case "seat.turn.started": updateRuntimeSeat(event.seatId, event.provenance, "Working · " + (payload.role || "turn"), "warn"); addFeed((event.seatId || "seat") + " · " + (payload.role || "turn"), "dim"); break;
+        case "seat.output": addFeed((event.seatId || "seat") + "  " + (payload.text || "")); break;
+        case "seat.tool": addFeed((event.seatId || "seat") + "  tool " + (payload.name || "tool") + (payload.summary ? " · " + payload.summary : ""), "dim"); break;
+        case "seat.model.observed": updateRuntimeSeat(event.seatId, event.provenance, "Working", event.provenance && event.provenance.state === "mismatch_or_fallback" ? "warn" : "good"); break;
+        case "seat.model.mismatch":
+          updateRuntimeSeat(event.seatId, event.provenance, "Fallback / remap", "warn");
+          var warningKey = [event.turnId || "", event.seatId || "", payload.requested || "default", payload.reported || "unknown"].join("|");
+          if (!app.modelWarningKeys.has(warningKey)) {
+            app.modelWarningKeys.add(warningKey);
+            addFeed("⚠ " + event.seatId + " requested " + (payload.requested || "default") + " but reported " + (payload.reported || "unknown"), "warn");
+          }
+          break;
+        case "seat.turn.finished":
+          var uncertainModel = !event.provenance || !event.provenance.reportedModel;
+          var changedModel = event.provenance && event.provenance.state === "mismatch_or_fallback";
+          updateRuntimeSeat(event.seatId, event.provenance, changedModel ? "Turn complete · fallback / remap" : uncertainModel ? "Turn complete · model unverified" : "Turn complete", changedModel || uncertainModel ? "warn" : "good");
+          addFeed("✓ " + event.seatId + " completed the turn" + (changedModel ? " · model fallback/remap recorded" : uncertainModel ? " · no runtime model reported" : ""), changedModel || uncertainModel ? "warn" : "good");
+          break;
+        case "seat.turn.failed": updateRuntimeSeat(event.seatId, event.provenance, "Turn failed", "bad"); addFeed("✗ " + event.seatId + " · " + (payload.message || payload.code || "turn failed"), "bad"); break;
+        case "seat.turn.cancelled": updateRuntimeSeat(event.seatId, event.provenance, "Cancelled", "bad"); break;
+        case "review.ready": addFeed("Review verdict · " + (payload.verdict || "UNREVIEWED") + (payload.summary ? " · " + payload.summary : "") + (Array.isArray(payload.findings) ? " · " + payload.findings.length + " finding(s)" : ""), payload.verdict === "APPROVE" || payload.verdict === "approve" ? "good" : "warn"); break;
+        case "result.branch.created": addFeed("★ Local result branch · " + (payload.branch || "created"), "good"); break;
+        case "gate.leader":
+          if (payload.id && payload.id !== app.pendingGateId) { app.pendingGateId = payload.id; renderLeaderGate(payload); }
+          break;
+        case "gate.result":
+          if (payload.id && payload.id !== app.pendingGateId) { app.pendingGateId = payload.id; renderResultGate(payload); }
+          break;
+        case "run.finished": finishRun(payload.status || "finished", "Run complete. The durable record includes per-turn model provenance."); break;
+        case "run.done":
+          if (!event.runId || event.runId === app.activeRunId) app.activeRunId = null;
+          finishRun(payload.status || "finished", "Run complete. The durable record includes per-turn model provenance.");
+          setTimeout(function () { loadRunHistory(event.runId || app.runId); }, 60);
+          break;
+        case "run.error":
+          if (!event.runId || event.runId === app.activeRunId) app.activeRunId = null;
+          addFeed("Run error · " + (payload.message || "unknown error"), "bad");
+          finishRun("failed", payload.message || "Run failed. Your workspaces were preserved.");
+          setTimeout(function () { loadRunHistory(event.runId || app.runId); }, 60);
+          break;
+        case "notice": if (payload.level !== "debug") addFeed(payload.message || "Notice", payload.level === "warn" ? "warn" : "dim"); break;
+      }
+    }
+    function showRunError(message) { var node = byId("run-error"); node.textContent = message; node.hidden = false; }
+    function clearRunError() { byId("run-error").hidden = true; byId("run-error").textContent = ""; }
+    function resetGreenfieldConfirmation() {
+      app.greenfieldConfirmationKey = null;
+      byId("real-run").textContent = "Run with my accounts";
+    }
+    function confirmGreenfieldIntent() {
+      if (byId("seed-kind").value !== "greenfield") return true;
+      var task = byId("task").value.trim();
+      if (!/\b(repo|repository|codebase|readme|roadmap|existing|refactor)\b/i.test(task)) return true;
+      if (app.greenfieldConfirmationKey === task) return true;
+      app.greenfieldConfirmationKey = task;
+      byId("real-run").textContent = "Run in blank repo anyway";
+      showRunError("This task sounds like it targets an existing repository, but Starting point is Blank repository. Choose Local repository / Git clone URL, or click “Run in blank repo anyway” to confirm.");
+      return false;
+    }
+    async function recoverStartFailure(error, message) {
+      var refreshed = await loadBootstrap();
+      if (!refreshed) {
+        showRunError("Could not verify whether the run started. Reload to reconnect before trying again. " + error.message);
+        return;
+      }
+      if (app.running || app.activeRunId) {
+        showRunError("A run is already active. Reconnected to its current state. " + error.message);
+        return;
+      }
+      finishRun("failed", message);
+      showRunError(error.message);
+    }
+    async function startRealRun(event) {
+      event.preventDefault();
+      clearRunError();
+      syncPreflight();
+      if (byId("real-run").disabled) { showRunError("Complete the task, source, account readiness, and model choices before starting."); return; }
+      if (!confirmGreenfieldIntent()) return;
+      var seats = [readSeat(0), readSeat(1)];
+      resetGreenfieldConfirmation();
+      prepareRunUi(seats, "Validating your local harnesses…");
+      try {
+        var started = await post("/api/run", { mode: "real", saveConfig: byId("save-defaults").checked, task: byId("task").value.trim(), preset: byId("preset").value, seed: readSeed(), seats: seats });
+        if (started.runId && !app.runId) handleEvent({ kind: "run.id", runId: started.runId, payload: { runId: started.runId, mode: "real" } });
+      } catch (error) {
+        await recoverStartFailure(error, "The run did not start.");
+      }
+    }
+    async function startDemo() {
+      clearRunError();
+      if (app.running || app.activeRunId) { showRunError("A run is already active. Finish it before starting the demo."); return; }
+      var fake = app.adapters.get("fake") || { displayName: "Deterministic demo", provider: "local" };
+      var seats = [
+        { seatId: "seat-a", label: "Seat A (Alpha)", adapterId: "fake", provider: "local", authLabel: "No authorization required", requestedModel: "alpha-mini", modelPolicy: "pinned" },
+        { seatId: "seat-b", label: "Seat B (Beta)", adapterId: "fake", provider: "local", authLabel: "No authorization required", requestedModel: null, modelPolicy: "harness_default" }
+      ];
+      app.adapters.set("fake", Object.assign({}, fake, { id: "fake", displayName: "Deterministic demo" }));
+      prepareRunUi(seats, "Starting the local, zero-token demo…");
+      try {
+        var started = await post("/api/run", { mode: "demo" });
+        if (started.runId && !app.runId) handleEvent({ kind: "run.id", runId: started.runId, payload: { runId: started.runId, mode: "demo" } });
+      }
+      catch (error) { await recoverStartFailure(error, "The demo did not start."); }
+    }
+    function formatTime(value) {
+      if (!value) return "unknown time";
+      var date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    }
+    function runStatusLabel(status) {
+      return { running: "Running", finished: "Finished", declined: "No branch", not_created: "No branch", blocked: "Blocked", failed: "Failed", legacy: "Legacy read-only", quarantined: "Quarantined" }[status] || status || "Unknown";
+    }
+    function runStatusTone(status) {
+      return status === "finished" ? "good" : ["running", "declined", "not_created", "legacy", "quarantined"].includes(status) ? "warn" : "bad";
+    }
+    function renderRunPicker(listing, selectedId) {
+      var runs = Array.isArray(listing && listing.runs) ? listing.runs : [];
+      var picker = byId("run-picker");
+      picker.replaceChildren();
+      if (!runs.length) {
+        var empty = document.createElement("option");
+        empty.textContent = "No durable runs yet";
+        picker.append(empty);
+        picker.disabled = true;
+        byId("history-summary").textContent = "Runs will appear here after they start. Interrupted runs are preserved and marked failed, never silently resumed.";
+        return;
+      }
+      runs.forEach(function (run) {
+        var option = document.createElement("option");
+        option.value = run.runId;
+        option.textContent = (run.active ? "● Active · " : "") + (run.legacy ? "Legacy Council · " : "") + run.runId + " · " + runStatusLabel(run.status) + " · " + formatTime(run.createdAt);
+        picker.append(option);
+      });
+      picker.disabled = false;
+      if (selectedId && runs.some(function (run) { return run.runId === selectedId; })) picker.value = selectedId;
+      var active = runs.find(function (run) { return run.active; });
+      var legacyCount = runs.filter(function (run) { return run.legacy; }).length;
+      byId("history-summary").textContent = runs.length + " durable run" + (runs.length === 1 ? "" : "s") + (legacyCount ? " · " + legacyCount + " read-only from Council" : "") + (active ? " · " + active.runId + " is active" : " · newest first") + ". Selecting history never restarts a run.";
+    }
+    function renderRunSnapshot(snapshot, history) {
+      var state = snapshot && snapshot.state;
+      if (!state) {
+        app.runId = null;
+        app.viewRunId = null;
+        app.running = false;
+        byId("run-workspace").hidden = true;
+        syncPreflight();
+        return;
+      }
+      var runId = snapshot.runId || state.runId;
+      app.runId = runId;
+      app.viewRunId = runId;
+      app.activeRunId = snapshot.activeRunId || null;
+      app.running = snapshot.running === true;
+      app.pendingGateId = null;
+      app.currentStage = state.stage || null;
+      app.modelWarningKeys.clear();
+      app.activeSeats = Array.isArray(state.seats) ? state.seats.map(function (seat) {
+        var adapter = app.adapters.get(seat.adapterId) || {};
+        return Object.assign({}, seat, { authLabel: snapshot.legacy ? "Legacy authorization was not recorded" : authModeLabel(adapter, seat.authMode) });
+      }) : [];
+      byId("run-workspace").hidden = false;
+      byId("feed").replaceChildren();
+      byId("action-zone").hidden = true;
+      renderRuntimeSeats();
+      updateProgress(null);
+
+      var events = Array.isArray(history && history.events) ? history.events : [];
+      var maxSeq = 0;
+      if (history && history.legacy) addFeed(history.note || "Legacy Council activity is read-only and is not replayed through the newer event schema.", "warn");
+      if (history && history.truncated) addFeed("Earlier activity is omitted from this browser view; the durable record remains on disk.", "warn");
+      var integrity = history && history.integrity || {};
+      if ((integrity.gaps || []).length || (integrity.duplicates || []).length || Number(integrity.torn) > 0) addFeed("Activity-log integrity warning: inspect this run with the CLI before trusting a complete replay.", "warn");
+      events.forEach(function (event) {
+        if (Number.isInteger(event.seq)) maxSeq = Math.max(maxSeq, event.seq);
+        handleEvent(event);
+      });
+      app.lastSeqByRun.set(runId, Math.max(app.lastSeqByRun.get(runId) || 0, maxSeq));
+      if (!events.length && !(history && history.legacy)) addFeed("No durable activity has been recorded for this run yet.", "dim");
+
+      app.currentStage = state.stage || null;
+      updateProgress(app.currentStage);
+      var provenanceBySeat = state.provenanceBySeat || {};
+      app.activeSeats.forEach(function (seat) {
+        var provenance = provenanceBySeat[seat.seatId];
+        if (!provenance) {
+          updateRuntimeSeat(seat.seatId, { provider: seat.provider, requestedModel: seat.requestedModel, configuredModel: seat.configuredModel, reportedModel: null, authLabel: seat.authLabel }, snapshot.running ? "No turn evidence yet" : "No runtime model report", "warn");
+          return;
+        }
+        var uncertain = !provenance.reportedModel || provenance.state === "mismatch_or_fallback";
+        updateRuntimeSeat(seat.seatId, provenance, uncertain ? "Last known · verify model" : "Last known · model reported", uncertain ? "warn" : "good");
+      });
+      app.running = snapshot.running === true;
+      if (app.running) {
+        byId("run-badge").textContent = snapshot.pendingDecision ? "Action required" : "Working";
+        byId("run-badge").className = "badge warn";
+        byId("run-subtitle").textContent = "Run " + runId + " · " + stageLabel(state.stage || "running") + " · durable live record";
+        if (snapshot.pendingDecision && snapshot.pendingDecision.kind) handleEvent(snapshot.pendingDecision);
+      } else if (snapshot.legacy) {
+        byId("action-zone").hidden = true;
+        byId("run-badge").textContent = "Legacy · " + runStatusLabel(state.status);
+        byId("run-badge").className = "badge warn";
+        byId("run-subtitle").textContent = "Legacy Council run " + runId + " · started " + formatTime(state.createdAt) + " · read-only, unattested history";
+      } else {
+        byId("action-zone").hidden = true;
+        byId("run-badge").textContent = runStatusLabel(state.status);
+        byId("run-badge").className = "badge " + runStatusTone(state.status);
+        byId("run-subtitle").textContent = "Run " + runId + " · started " + formatTime(state.createdAt) + " · durable local history";
+      }
+      byId("history-summary").textContent = app.running ? "Viewing active run " + runId + ". Activity and decisions update live." : snapshot.legacy ? "Viewing legacy Council run " + runId + " · read-only · runtime model and review-event evidence are unattested." : "Viewing durable run " + runId + " · " + runStatusLabel(state.status) + ". This view is read-only.";
+      syncPreflight();
+    }
+    async function selectRun(runId) {
+      if (!runId) return;
+      var version = ++app.historyLoadVersion;
+      app.viewRunId = runId;
+      app.replayLoadingRunId = runId;
+      app.bufferedLiveEvents = [];
+      byId("run-picker").value = runId;
+      byId("history-summary").textContent = "Loading run " + runId + "…";
+      try {
+        var encoded = encodeURIComponent(runId);
+        var loaded = await Promise.all([requestJson("/api/state?runId=" + encoded), requestJson("/api/events?runId=" + encoded)]);
+        if (version !== app.historyLoadVersion) return;
+        renderRunSnapshot(loaded[0], loaded[1]);
+        var buffered = app.bufferedLiveEvents;
+        app.replayLoadingRunId = null;
+        app.bufferedLiveEvents = [];
+        buffered.forEach(applyLiveEvent);
+      } catch (error) {
+        if (version !== app.historyLoadVersion) return;
+        var buffered = app.bufferedLiveEvents;
+        app.replayLoadingRunId = null;
+        app.bufferedLiveEvents = [];
+        buffered.forEach(applyLiveEvent);
+        byId("history-summary").textContent = "Could not load that durable run: " + error.message;
+        setGlobalStatus("Run history could not be loaded. Refresh history and inspect the run with moh if the problem continues.", "bad");
+      }
+    }
+    async function loadRunHistory(preferredRunId) {
+      try {
+        var listing = await requestJson("/api/runs");
+        var runs = Array.isArray(listing.runs) ? listing.runs : [];
+        app.activeRunId = listing.activeRunId || null;
+        var valid = function (id) { return !!id && runs.some(function (run) { return run.runId === id; }); };
+        var target = valid(preferredRunId) ? preferredRunId : valid(app.viewRunId) ? app.viewRunId : valid(app.activeRunId) ? app.activeRunId : runs[0] && runs[0].runId;
+        renderRunPicker(listing, target);
+        if (target) await selectRun(target);
+        else renderRunSnapshot({ state: null }, null);
+        renderRunPicker(listing, target);
+        syncPreflight();
+        return listing;
+      } catch (error) {
+        byId("history-summary").textContent = "Could not load run history: " + error.message;
+        syncPreflight();
+        return null;
+      }
+    }
+    async function loadBootstrap() {
+      setGlobalStatus("Checking local harnesses…");
+      try {
+        var draft = seatDrafts();
+        var data = await requestJson("/api/bootstrap");
+        app.bootstrap = data;
+        app.adapters = new Map((data.adapters || []).map(function (adapter) { return [adapter.id, adapter]; }));
+        app.running = data.running === true;
+        app.activeRunId = data.activeRunId || (data.running ? data.runId : null);
+        byId("network-scope").textContent = data.exposed ? "Exposed beyond loopback" : "Loopback only";
+        byId("network-scope").className = "badge " + (data.exposed ? "bad" : "good");
+        renderConnections();
+        initializeSeats(draft);
+        var defaults = data.config || data.defaults || data.savedConfig || {};
+        byId("preset").value = defaults.defaultPreset || defaults.preset || "full-mixture";
+        var history = await loadRunHistory(data.runId || data.activeRunId);
+        if (!history && data.state) renderRunSnapshot(data, { events: [] });
+        syncPreflight();
+        var ready = primaryReadyCount();
+        setGlobalStatus(scopePrefix() + ready + "/2 primary harnesses ready · checked through local CLIs · no inference tokens spent", data.exposed ? "bad" : ready === 2 ? "good" : "");
+        return data;
+      } catch (error) {
+        setGlobalStatus("Could not load harness status: " + error.message, "bad");
+        showRunError("The local companion could not read setup status. Refresh the page or run moh doctor.");
+        return null;
+      }
+    }
+    byId("run-form").addEventListener("submit", startRealRun);
+    byId("demo-run").addEventListener("click", startDemo);
+    byId("refresh-status").addEventListener("click", loadBootstrap);
+    byId("refresh-history").addEventListener("click", function () { loadRunHistory(app.viewRunId); });
+    byId("run-picker").addEventListener("change", async function () { await selectRun(byId("run-picker").value); if (!byId("run-workspace").hidden) byId("run-workspace").scrollIntoView({ behavior: "smooth", block: "start" }); });
+    byId("task").addEventListener("input", function () { resetGreenfieldConfirmation(); clearRunError(); syncPreflight(); });
+    byId("seed-kind").addEventListener("change", function () { resetGreenfieldConfirmation(); clearRunError(); updateSeed(); });
+    byId("seed-value").addEventListener("input", function () { resetGreenfieldConfirmation(); clearRunError(); syncPreflight(); });
+    byId("clear-feed").addEventListener("click", function () { byId("feed").replaceChildren(); });
+    function applyLiveEvent(event) {
+      var eventRunId = event.runId || event.payload && event.payload.runId || null;
+      if (["run.done", "run.error"].includes(event.kind) && eventRunId && eventRunId === app.activeRunId) {
+        app.activeRunId = null;
+        syncPreflight();
+        if (eventRunId !== app.viewRunId) { setTimeout(function () { loadRunHistory(app.viewRunId); }, 60); return; }
+      }
+      if (!eventRunId || eventRunId !== app.viewRunId) return;
+      if (Number.isInteger(event.seq)) {
+        var lastSeq = app.lastSeqByRun.get(eventRunId) || 0;
+        if (event.seq <= lastSeq) return;
+        app.lastSeqByRun.set(eventRunId, event.seq);
+      }
+      handleEvent(event);
+    }
+    var events = new EventSource("/events");
+    events.onopen = function () { if (app.bootstrap) setGlobalStatus(scopePrefix() + "Live updates connected · " + primaryReadyCount() + "/2 primary harnesses ready · no inference tokens spent", app.bootstrap.exposed ? "bad" : primaryReadyCount() === 2 ? "good" : ""); };
+    events.onmessage = function (message) {
+      try {
+        var event = JSON.parse(message.data);
+        if (event.kind === "run.id") { handleEvent(event); setTimeout(function () { loadRunHistory(event.runId || event.payload && event.payload.runId); }, 60); return; }
+        var eventRunId = event.runId || event.payload && event.payload.runId || null;
+        if (eventRunId && eventRunId === app.replayLoadingRunId) { app.bufferedLiveEvents.push(event); return; }
+        applyLiveEvent(event);
+      } catch (_) {}
+    };
+    events.onerror = function () { setGlobalStatus("Live updates disconnected. The run continues locally; reload to reconnect.", "bad"); };
+    loadBootstrap();
+  })();
 </script>
 </body>
 </html>

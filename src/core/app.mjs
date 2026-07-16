@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { EventBus, makeEvent, EventKind } from './events.mjs';
 import { makeIdFactory, isSafeSegment, isSafeRunId } from './ids.mjs';
 import { Stage, Preset, stagesFor, hasIntegration } from './state.mjs';
-import { newProvenance, observeModel, ProvenanceState } from './provenance.mjs';
+import { newProvenance, observeModel, ProvenanceState, sanitizeReportedModel, sanitizeRuntimeMetadata } from './provenance.mjs';
 import { newReviewChallenge, parseReview, Verdict, isApproved } from './review.mjs';
 import { buildReceipt } from './receipt.mjs';
 import { RunStore } from '../storage/store.mjs';
@@ -17,6 +17,15 @@ import { stripControl, redactDeep, sanitizeGitUrl } from '../security/redact.mjs
 import * as P from '../prompts/prompts.mjs';
 
 const MAX_REVISIONS = 1;
+
+function safeEnvNames(names) {
+  if (!Array.isArray(names)) return [];
+  return [...new Set(names.filter((name) => typeof name === 'string' && /^[A-Z][A-Z0-9_]*$/.test(name)))];
+}
+
+function safeMetadata(value) {
+  return value == null ? null : redactDeep(value);
+}
 
 /** A decider supplies human decisions at gates. Auto-decider is used by demo/CI. */
 export function autoDecider() {
@@ -60,9 +69,9 @@ export class Application {
     const seq = (this._seqByRun.get(runId) || 0) + 1; // PER-RUN monotonic sequence
     this._seqByRun.set(runId, seq);
     const ts = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
-    // Redact secret-shaped values and secret-named keys from EVERY event before it
-    // is persisted or broadcast (covers text, notices, model metadata, errors).
-    const evt = redactDeep(makeEvent({ seq, runId, ts, ...partial }));
+    // Redact secrets, account identifiers, and terminal controls from EVERY event
+    // before persistence/broadcast (covers text, stderr notices, metadata, errors).
+    const evt = sanitizeRuntimeMetadata(makeEvent({ seq, runId, ts, ...partial }));
     this.store.appendEvent(runId, evt);
     this.bus.emit(evt);
     if (isFinish) this._finishedRuns.add(runId);
@@ -120,15 +129,28 @@ export class Application {
       const seatId = s.seatId || (i === 0 ? 'seat-a' : 'seat-b');
       // Seat ids become filesystem path segments — reject traversal before use.
       if (!isSafeSegment(seatId)) throw new Error(`unsafe seat id: ${JSON.stringify(seatId)}`);
+      const requestedModel = s.requestedModel ?? null;
+      const configuredModel = s.configuredModel ?? null;
+      const modelCatalog = safeMetadata(s.modelCatalog);
       return {
       seatId,
       label: s.label || (i === 0 ? 'Seat A' : 'Seat B'),
       adapterId: s.adapterId,
-      requestedModel: s.requestedModel ?? null,
+      provider: s.provider ?? 'unknown',
+      profile: s.profile ?? null,
+      requestedModel,
+      requestedModelSource: s.requestedModelSource ?? (requestedModel ? 'user' : configuredModel ? 'config' : 'default'),
+      configuredModel,
+      modelPolicy: safeMetadata(s.modelPolicy),
+      modelCatalog,
+      modelCatalogSource: s.modelCatalogSource ?? modelCatalog?.source ?? null,
+      modelCatalogCheckedAt: s.modelCatalogCheckedAt ?? modelCatalog?.checkedAt ?? null,
+      modelClaim: safeMetadata(s.modelClaim),
       requestedEffort: s.requestedEffort ?? null,
       permissionMode: s.permissionMode ?? null,
       sandbox: s.sandbox ?? 'unknown',
-      authEnvNames: s.authEnvNames ?? [],
+      authMode: s.authMode ?? null,
+      authEnvNames: safeEnvNames(s.authEnvNames),
       authLabel: s.authLabel,
       adapterConfig: s.adapterConfig ?? {},
       };
@@ -198,10 +220,19 @@ export class Application {
       harnessVersion: facts.harnessVersion,
       adapterVersion: facts.adapterVersion,
       provider: seat.provider || 'unknown',
+      profile: seat.profile,
       requestedModel: seat.requestedModel,
-      requestedModelSource: seat.requestedModel ? 'user' : 'default',
+      requestedModelSource: seat.requestedModelSource,
+      configuredModel: seat.configuredModel,
+      modelPolicy: seat.modelPolicy,
+      modelCatalog: seat.modelCatalog,
+      modelCatalogSource: seat.modelCatalogSource,
+      modelCatalogCheckedAt: seat.modelCatalogCheckedAt,
+      modelClaim: seat.modelClaim,
       requestedEffort: seat.requestedEffort,
       authLabel: this._authLabel(seat),
+      authMode: seat.authMode,
+      authEnvNames: seat.authEnvNames,
       sandbox: seat.sandbox,
       continuity: ctxExtra.resume ? 'native_resume' : 'new',
     });
@@ -217,10 +248,21 @@ export class Application {
       workspaceDir: ctxExtra.workspaceDir || state.workspaces[seat.seatId]?.dir,
       prompt: ctxExtra.prompt,
       role,
+      provider: seat.provider,
+      profile: seat.profile,
       requestedModel: seat.requestedModel,
+      requestedModelSource: seat.requestedModelSource,
+      configuredModel: seat.configuredModel,
+      modelPolicy: seat.modelPolicy,
+      modelCatalog: seat.modelCatalog,
+      modelCatalogSource: seat.modelCatalogSource,
+      modelCatalogCheckedAt: seat.modelCatalogCheckedAt,
+      modelClaim: seat.modelClaim,
       requestedEffort: seat.requestedEffort,
       permissionMode: seat.permissionMode,
       sandbox: seat.sandbox,
+      authMode: seat.authMode,
+      authEnvNames: seat.authEnvNames,
       adapterConfig: seat.adapterConfig,
       reviewChallenge: ctxExtra.reviewChallenge,
       resume: ctxExtra.resume || null,
@@ -261,6 +303,25 @@ export class Application {
       return { status: 'failed', finalText: '', sessionId: null, provenance: prov, attemptId };
     }
     turnDone = true; // no further onEvent callbacks may advance state after this point
+
+    // Some adapters can only return model/usage evidence from finalize(). Preserve
+    // it even if no streaming model event was emitted. Identical streamed/final
+    // observations are skipped so mismatch notices remain deduplicated.
+    const finalizedModel = sanitizeReportedModel(result.reportedModel);
+    if (finalizedModel && finalizedModel !== prov.reportedModel) {
+      const observed = observeModel(prov, {
+        reportedModel: finalizedModel,
+        evidenceSource: 'adapter.finalize',
+        usage: result.usage || null,
+      });
+      prov = observed.prov;
+      this._emit(state.runId, { kind: EventKind.SEAT_MODEL_OBSERVED, stage: state.stage, seatId: seat.seatId, attemptId, turnId, payload: {}, provenance: prov });
+      if (observed.mismatch) {
+        this._emit(state.runId, { kind: EventKind.SEAT_MODEL_MISMATCH, stage: state.stage, seatId: seat.seatId, attemptId, turnId, payload: { requested: prov.requestedModel, reported: prov.reportedModel, history: prov.history }, provenance: prov });
+      }
+    } else if (result.usage != null && prov.usage == null) {
+      prov.usage = sanitizeRuntimeMetadata(result.usage);
+    }
 
     prov.endedAt = this.deterministic ? '1970-01-01T00:00:00.000Z' : new Date().toISOString();
     prov.sessionId = result.sessionId || prov.sessionId;
@@ -326,6 +387,9 @@ export class Application {
     if (Application.TERMINAL.has(state.status)) {
       throw new Error(`run ${runId} is already ${state.status}; use \`moh resume ${runId} --retry\` to start a fresh run`);
     }
+    // Single-writer: refuse a concurrent driver or a silent re-drive of an
+    // interrupted run before emitting or hashing anything.
+    this.store.acquireDriveLock(runId);
     this._seedSeq(runId, state); // never reuse a persisted sequence number
     try {
       const outcome = await this._drive(state);
@@ -343,6 +407,8 @@ export class Application {
       this._emit(runId, { kind: EventKind.RUN_FINISHED, payload: { status: 'failed', error: e.message } });
       this.store.release(runId);
       throw e;
+    } finally {
+      this.store.releaseDriveLock(runId);
     }
   }
 

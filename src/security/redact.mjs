@@ -1,5 +1,6 @@
 // Redaction of secret-shaped values. Applied to anything that could reach a log,
 // event, export, diagnostic, or the web/TUI. We never print secret values.
+import { homedir } from 'node:os';
 
 const PATTERNS = [
   // Common token prefixes.
@@ -73,6 +74,28 @@ export function redactDeep(value, seen = new WeakSet()) {
         out[k] = redactDeep(v, seen);
       }
     }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Replace the exporting user's home-directory prefix with `~` throughout a value
+ * so a privacy-safe export or shareable transcript never leaks the username /
+ * home path in an UNENUMERATED field (errors, review prose, config). Complements
+ * the export's per-field basenaming, which only covers known path fields.
+ * Structure-preserving: rewrites string leaves only.
+ */
+export function scrubUserPaths(value, home = homedir(), seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    return home && home.length > 3 ? value.split(home).join('~') : value;
+  }
+  if (Array.isArray(value)) return value.map((v) => scrubUserPaths(v, home, seen));
+  if (value && typeof value === 'object') {
+    if (seen.has(value)) return value;
+    seen.add(value);
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = scrubUserPaths(v, home, seen);
     return out;
   }
   return value;

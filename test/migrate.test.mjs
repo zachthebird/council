@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { migrateCouncilRun } from '../src/storage/migrate.mjs';
+import { scanLegacyCouncil } from '../src/storage/migrate.mjs';
+import { legacyCouncilDirs } from '../src/storage/paths.mjs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const legacy = {
   runId: 'legacy-42',
@@ -42,4 +47,19 @@ test('newer/malformed schema is quarantined, never silently discarded', () => {
   assert.ok(r1.original);
   const r2 = migrateCouncilRun(null);
   assert.equal(r2.ok, false);
+});
+
+test('default legacy discovery includes the package root used by repo-local Council runs', () => {
+  const root = mkdtempSync(join(tmpdir(), 'moh-legacy-root-'));
+  const runDir = join(root, 'runs', 'legacy-local');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'state.json'), JSON.stringify(legacy));
+  try {
+    assert.ok(legacyCouncilDirs({ packageRoot: root }).includes(resolve(root)));
+    const found = scanLegacyCouncil(root);
+    assert.equal(found.length, 1);
+    assert.equal(found[0].legacy.runId, 'legacy-42');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

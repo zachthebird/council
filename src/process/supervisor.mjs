@@ -14,7 +14,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxOutputBytes: 8 * 1024 * 1024,
   maxStderrBytes: 2 * 1024 * 1024,
   maxStdinBytes: 4 * 1024 * 1024,
-  timeoutMs: 10 * 60 * 1000,
+  // Real repository work can legitimately take well over 30 minutes. This is
+  // a hang guard, not a quota; callers can still choose a shorter bound.
+  timeoutMs: 90 * 60 * 1000,
   killGraceMs: 4000,
 });
 

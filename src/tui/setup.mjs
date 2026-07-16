@@ -1,7 +1,7 @@
 // Guided first-run setup. Explains the privacy model, discovers harnesses, and
 // configures two seats independently. Non-interactive fallback writes a safe
 // default (two fake seats) so CI/smoke tests never hang.
-import { listAdapters, getAdapter } from '../adapters/registry.mjs';
+import { getAdapter } from '../adapters/registry.mjs';
 import { Readiness } from '../adapters/contract.mjs';
 import { doctor } from '../cli/doctor.mjs';
 import { ask } from '../cli/prompt.mjs';
@@ -56,7 +56,10 @@ async function configureSeat(label, options, ready) {
   const adapter = getAdapter(adapterId);
   let permissionMode = null;
   if (adapterId === 'claude-code') {
-    const pm = (await ask('  permission mode [acceptEdits|plan|bypassPermissions] (default acceptEdits): ')).trim() || 'acceptEdits';
+    const permissionChoices = new Set(['acceptEdits', 'auto', 'default', 'dontAsk', 'plan', 'bypassPermissions']);
+    const answer = (await ask('  permission mode [acceptEdits|auto|default|dontAsk|plan|bypassPermissions] (default acceptEdits): ')).trim() || 'acceptEdits';
+    const pm = permissionChoices.has(answer) ? answer : 'acceptEdits';
+    if (pm !== answer) out(c.dim('  unsupported permission mode; using acceptEdits'));
     if (pm === 'bypassPermissions') {
       const confirm = (await ask(c.yellow('  ⚠ bypassPermissions disables all permission checks. Type "I understand" to enable: '))).trim();
       permissionMode = confirm === 'I understand' ? 'bypassPermissions' : 'acceptEdits';
@@ -65,6 +68,12 @@ async function configureSeat(label, options, ready) {
       permissionMode = pm;
     }
   }
+  let auth = authDefaults(adapterId);
+  if (adapterId === 'claude-code') {
+    const choice = (await ask('  authentication [native|api-key-env|oauth-token-env] (default native): ')).trim() || 'native';
+    auth = authDefaults(adapterId, choice);
+    if (auth.authMode === 'native' && choice !== 'native') out(c.dim('  unsupported authentication mode; using native Claude login'));
+  }
   const seat = {
     seatId: label.toLowerCase().replace(/\s+/g, '-'),
     label,
@@ -72,17 +81,27 @@ async function configureSeat(label, options, ready) {
     requestedModel: model,
     requestedEffort: effort,
     permissionMode,
-    authEnvNames: adapterId === 'claude-code' ? ['ANTHROPIC_API_KEY'] : [],
+    ...auth,
   };
   if (adapterId === 'fake') seat.adapterConfig = { reportedModel: `${label.replace(/\s/g, '')}-model`, sessionPrefix: label[0].toLowerCase() };
   return seat;
 }
 
-function defaultConfig(defAdapter) {
+function authDefaults(adapterId, requested = null) {
+  if (adapterId === 'fake') return { authMode: 'none', authEnvNames: [], authLabel: 'No authentication required' };
+  if (adapterId === 'claude-code') {
+    if (requested === 'api-key-env') return { authMode: 'api_key_env', authEnvNames: ['ANTHROPIC_API_KEY'], authLabel: 'ANTHROPIC_API_KEY from environment' };
+    if (requested === 'oauth-token-env') return { authMode: 'oauth_token_env', authEnvNames: ['CLAUDE_CODE_OAUTH_TOKEN'], authLabel: 'CLAUDE_CODE_OAUTH_TOKEN from environment' };
+    return { authMode: 'native', authEnvNames: [], authLabel: 'Claude native login (delegated)' };
+  }
+  return { authMode: 'delegated', authEnvNames: [], authLabel: 'Harness-managed login (delegated)' };
+}
+
+export function defaultConfig(defAdapter) {
   return {
     seats: [
-      { seatId: 'seat-a', label: 'Seat A', adapterId: defAdapter, requestedModel: null, authEnvNames: defAdapter === 'claude-code' ? ['ANTHROPIC_API_KEY'] : [], adapterConfig: defAdapter === 'fake' ? { reportedModel: 'seat-a-model', sessionPrefix: 'a' } : undefined },
-      { seatId: 'seat-b', label: 'Seat B', adapterId: 'fake', requestedModel: null, adapterConfig: { reportedModel: null, sessionPrefix: 'b' } },
+      { seatId: 'seat-a', label: 'Seat A', adapterId: defAdapter, requestedModel: null, ...authDefaults(defAdapter), adapterConfig: defAdapter === 'fake' ? { reportedModel: 'seat-a-model', sessionPrefix: 'a' } : undefined },
+      { seatId: 'seat-b', label: 'Seat B', adapterId: 'fake', requestedModel: null, ...authDefaults('fake'), adapterConfig: { reportedModel: null, sessionPrefix: 'b' } },
     ],
     defaultPreset: 'full-mixture',
   };

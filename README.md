@@ -49,6 +49,57 @@ integrate → structured review → local result branch — with a deterministic
 harness**, and prints per-seat provenance (including one seat that reports its model and
 one that honestly does not).
 
+### Use your own Claude and Codex accounts
+
+The browser companion delegates authorization to the official local CLIs. There are no
+password, OAuth-token, or API-key inputs in the browser. Sign in once from your terminal,
+then choose **Refresh status** in `moh web`:
+
+```bash
+claude auth login
+claude auth status --json
+
+codex login
+codex login status
+```
+
+Claude uses its native login by default. For automation, you can instead select either
+`ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; moh checks and forwards only the
+selected variable to Claude Code. The value stays in the process environment and is
+never entered in the browser or saved by moh.
+
+Codex reuses the official CLI session: `codex login` uses ChatGPT OAuth by default and
+can also store an API-key login. If the installed CLI supports `--profile`, a seat may
+select a named profile from your local Codex configuration; moh passes the profile name
+to the CLI without reading its credentials.
+
+Every run keeps these model facts separate:
+
+- **Requested** — the exact model selected for the seat, or the explicit choice to use
+  the harness default.
+- **Configured** — the model reported by an offline CLI/config probe, when the harness
+  exposes one. This does not prove what ran.
+- **Runtime-reported** — the model identity emitted by the harness during the turn,
+  stored with its evidence source. This is the effective-model evidence.
+
+Catalog verification is recorded separately from all three. Only an entry returned by a
+fresh local CLI catalog is eligible for **Latest frontier**. The current Codex CLI cannot
+return a profile-scoped catalog, so moh disables latest-frontier and custom-reasoning
+claims when a Codex profile is selected. Use a pinned model or the profile's default and
+verify the runtime report. If a harness exposes no usable catalog or runtime model,
+moh says so instead of guessing.
+
+### Run history and interrupted work
+
+`moh web` reads run state and events from durable local storage. Its run-history picker
+can reopen earlier runs, and a browser refresh can reconstruct the selected run without
+starting another harness turn. Existing repository-local Council runs also appear as
+clearly labeled, read-only history; their model and review evidence remains unattested
+rather than being reconstructed. When the web server starts, any run left marked as
+running is finalized as **failed — interrupted**; moh never silently repeats paid work.
+The run record and workspaces remain available for inspection and an explicit retry or
+resume.
+
 ## Commands
 
 | Command | Purpose |

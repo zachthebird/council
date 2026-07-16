@@ -4,6 +4,7 @@ workspaces/
 *.log
 *.tmp
 .DS_Store
+MOH-PROMPT.txt
 
 # Node
 node_modules/
@@ -14,3 +15,6 @@ npm-debug.log*
 .moh-config/
 coverage/
 *.tgz
+
+# Local architecture graph generated during development/review.
+graphify-out/

@@ -1,12 +1,12 @@
 // Claude Code adapter. Flags below were verified against the locally installed
 // `claude --help` (v2.1.x): -p/--print, --output-format stream-json, --model,
-// --effort, --permission-mode {acceptEdits,auto,bypassPermissions,manual,dontAsk,plan},
+// --effort, --permission-mode {acceptEdits,auto,bypassPermissions,default,dontAsk,plan},
 // --resume, --fork-session, --json-schema. We reuse Claude's own login/keychain;
 // we NEVER copy or read its credentials, and never silently pass --dangerously-skip-permissions.
 import { realpathSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { TrustLevel, Readiness, Capability, CapabilityState, capabilityMap, normEvent } from './contract.mjs';
 import { authPresent, buildChildEnv } from '../process/env-policy.mjs';
 import { executeProcessTurn } from './exec.mjs';
@@ -14,6 +14,83 @@ import { executeProcessTurn } from './exec.mjs';
 // Probes run with a MINIMAL environment (base allowlist only) — never the full
 // parent environment. Version/help output does not need caller secrets.
 const PROBE_ENV = () => buildChildEnv({}).env;
+
+export const ClaudeAuthMode = Object.freeze({
+  NATIVE: 'native',
+  API_KEY_ENV: 'api_key_env',
+  OAUTH_TOKEN_ENV: 'oauth_token_env',
+});
+
+function normalizeAuthMode(value) {
+  if (value == null || value === '') return ClaudeAuthMode.NATIVE;
+  const mode = String(value).trim().toLowerCase().replaceAll('-', '_');
+  if (['native', 'delegated', 'native_login', 'delegated_native_login'].includes(mode)) return ClaudeAuthMode.NATIVE;
+  if (['api_key', 'api_key_env', 'anthropic_api_key'].includes(mode)) return ClaudeAuthMode.API_KEY_ENV;
+  if (['oauth', 'oauth_token', 'oauth_token_env', 'claude_code_oauth_token'].includes(mode)) return ClaudeAuthMode.OAUTH_TOKEN_ENV;
+  throw new Error(`unsupported Claude authMode: ${value}`);
+}
+
+const CLAUDE_AUTH_ENV_ALLOWLIST = new Set(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+
+function safeEnvNames(names) {
+  if (!Array.isArray(names)) return [];
+  return [...new Set(names.filter((name) => CLAUDE_AUTH_ENV_ALLOWLIST.has(name)))];
+}
+
+/** Resolve the only auth environment variable names a Claude child may inherit. */
+export function claudeAuthEnvNames(ctx = {}) {
+  // Once authMode exists it is authoritative. This prevents a stale or forged
+  // authEnvNames list from smuggling unrelated parent secrets into the child.
+  if (ctx.authMode !== undefined && ctx.authMode !== null && ctx.authMode !== '') {
+    const mode = normalizeAuthMode(ctx.authMode);
+    if (mode === ClaudeAuthMode.API_KEY_ENV) return ['ANTHROPIC_API_KEY'];
+    if (mode === ClaudeAuthMode.OAUTH_TOKEN_ENV) return ['CLAUDE_CODE_OAUTH_TOKEN'];
+    return [];
+  }
+  // Legacy configs predate authMode. Accept at most one of the two historical,
+  // fixed Claude auth names; arbitrary uppercase names are never forwarded.
+  const explicit = safeEnvNames(ctx.authEnvNames);
+  if (explicit.includes('ANTHROPIC_API_KEY')) return ['ANTHROPIC_API_KEY'];
+  if (explicit.includes('CLAUDE_CODE_OAUTH_TOKEN')) return ['CLAUDE_CODE_OAUTH_TOKEN'];
+  return [];
+}
+
+function probeNativeAuth(exe) {
+  const result = spawnSync(exe, ['auth', 'status', '--json'], {
+    encoding: 'utf8',
+    timeout: 8000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: PROBE_ENV(),
+    maxBuffer: 256 * 1024,
+  });
+  const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+  if (stdout) {
+    try {
+      const status = JSON.parse(stdout);
+      // Deliberately project only the boolean. The official response can also
+      // contain email, organization, subscription, and provider identifiers.
+      if (status && typeof status === 'object' && typeof status.loggedIn === 'boolean') {
+        return { supported: true, loggedIn: status.loggedIn };
+      }
+    } catch {
+      /* unsupported/older output; use the safe fallback below */
+    }
+  }
+  const diagnostic = `${result.stderr || ''}\n${stdout}`.toLowerCase();
+  if (/unknown command|unrecognized|unexpected argument|invalid command/.test(diagnostic)) {
+    return { supported: false, loggedIn: false };
+  }
+  return { supported: false, loggedIn: false };
+}
+
+function modelEvent(out, state, reportedModel, evidenceSource, extra = {}) {
+  if (typeof reportedModel !== 'string' || !reportedModel.trim()) return;
+  const model = reportedModel.trim();
+  state.reportedModel = model;
+  if (!Array.isArray(state.reportedModels)) state.reportedModels = [];
+  if (!state.reportedModels.includes(model)) state.reportedModels.push(model);
+  out.push(normEvent('model', { reportedModel: model, evidenceSource, ...extra }));
+}
 
 function onPath(name) {
   try {
@@ -60,22 +137,25 @@ export function claudeParseEvents(chunk, state) {
     }
     if (ev.type === 'system' && ev.subtype === 'init') {
       if (ev.session_id) state.sessionId = ev.session_id;
-      if (ev.model) out.push(normEvent('model', { reportedModel: ev.model, evidenceSource: 'stream.system.init' }));
+      modelEvent(out, state, ev.model, 'stream.system.init');
     } else if (ev.type === 'assistant' && ev.message) {
       const content = Array.isArray(ev.message.content) ? ev.message.content : [];
       for (const c of content) {
         if (c.type === 'text' && c.text) out.push(normEvent('text', { text: c.text }));
         else if (c.type === 'tool_use') out.push(normEvent('tool', { name: c.name, summary: summarizeTool(c) }));
       }
-      if (ev.message.model) out.push(normEvent('model', { reportedModel: ev.message.model, evidenceSource: 'stream.assistant.message' }));
+      modelEvent(out, state, ev.message.model, 'stream.assistant.message');
     } else if (ev.type === 'result') {
       if (ev.session_id) state.sessionId = ev.session_id;
       if (typeof ev.result === 'string') state.finalText = ev.result;
       state.usage = ev.usage || state.usage || null;
-      // modelUsage is keyed by model id — a reliable runtime model signal when present.
-      if (ev.modelUsage && typeof ev.modelUsage === 'object') {
-        const ids = Object.keys(ev.modelUsage);
-        if (ids.length) out.push(normEvent('model', { reportedModel: ids[0], evidenceSource: 'stream.result.modelUsage', usage: ev.usage || null }));
+      modelEvent(out, state, ev.model, 'stream.result.model', { usage: ev.usage || null });
+      // modelUsage is an aggregate map, not an ordered execution trace. It can
+      // include auxiliary models, so use it only as a fallback when it names one
+      // unambiguous model and no primary runtime event reported a model.
+      if (!state.reportedModel && ev.modelUsage && typeof ev.modelUsage === 'object') {
+        const ids = Object.keys(ev.modelUsage).filter(Boolean);
+        if (ids.length === 1) modelEvent(out, state, ids[0], 'stream.result.modelUsage', { usage: ev.usage || null });
       }
       out.push(normEvent('final', { finalText: state.finalText || '', sessionId: state.sessionId || null, usage: ev.usage || null }));
     }
@@ -117,19 +197,45 @@ export const claudeCodeAdapter = {
   },
 
   // OFFLINE readiness — no tokens spent. Determines a sanitized auth LABEL only.
-  async probeReadiness() {
+  async probeReadiness(options = {}) {
     const exe = resolveExe();
     if (!exe) return { readiness: Readiness.MISSING, authLabel: 'not installed', detail: 'Install Claude Code and ensure `claude` is on PATH, or set MOH_CLAUDE_PATH.' };
-    if (authPresent('ANTHROPIC_API_KEY')) {
-      return { readiness: Readiness.READY, authLabel: 'ANTHROPIC_API_KEY present', detail: 'Using API key from environment (value never read by moh).' };
+
+    const explicit = claudeAuthEnvNames(options);
+    if (explicit.length) {
+      const present = explicit.find((name) => authPresent(name));
+      if (present) return { readiness: Readiness.READY, authLabel: `${present} present`, detail: 'Using an explicitly configured authentication environment variable (value never read by moh).' };
+      return { readiness: Readiness.NEEDS_LOGIN, authLabel: 'configured auth environment missing', detail: 'Set one of the explicitly configured authentication environment variables.' };
     }
-    // Delegated login: Claude stores its own credentials; we only check for the
-    // presence of its config dir, never read secrets.
+
+    const authMode = normalizeAuthMode(options.authMode);
+    if (authMode === ClaudeAuthMode.API_KEY_ENV) {
+      return authPresent('ANTHROPIC_API_KEY')
+        ? { readiness: Readiness.READY, authLabel: 'ANTHROPIC_API_KEY present', detail: 'Using the explicitly selected API-key environment mode (value never read by moh).' }
+        : { readiness: Readiness.NEEDS_LOGIN, authLabel: 'ANTHROPIC_API_KEY missing', detail: 'Set ANTHROPIC_API_KEY or select delegated native login.' };
+    }
+    if (authMode === ClaudeAuthMode.OAUTH_TOKEN_ENV) {
+      return authPresent('CLAUDE_CODE_OAUTH_TOKEN')
+        ? { readiness: Readiness.READY, authLabel: 'CLAUDE_CODE_OAUTH_TOKEN present', detail: 'Using the explicitly selected OAuth-token environment mode (value never read by moh).' }
+        : { readiness: Readiness.NEEDS_LOGIN, authLabel: 'CLAUDE_CODE_OAUTH_TOKEN missing', detail: 'Set CLAUDE_CODE_OAUTH_TOKEN or select delegated native login.' };
+    }
+
+    // Native login is the default. The official status command is authoritative
+    // when supported, and only its boolean is retained.
+    const native = probeNativeAuth(exe);
+    if (native.supported) {
+      return native.loggedIn
+        ? { readiness: Readiness.READY, authLabel: 'Claude native login (delegated)', detail: 'Confirmed by `claude auth status --json`; account identifiers were discarded.' }
+        : { readiness: Readiness.NEEDS_LOGIN, authLabel: 'Claude native login required', detail: 'Run `claude auth login`.' };
+    }
+
+    // Older CLIs may not expose `auth status`. Directory presence is a deliberately
+    // weak fallback: no credential files or values are read.
     const cfg = join(homedir(), '.claude');
     if (existsSync(cfg)) {
-      return { readiness: Readiness.READY, authLabel: 'Claude subscription/login (delegated)', detail: 'Reusing Claude Code native authorization. Run a real turn to confirm.' };
+      return { readiness: Readiness.READY, authLabel: 'Claude native login (delegated, unverified)', detail: 'The installed CLI lacks the official status probe; native authorization will be confirmed by the first real turn.' };
     }
-    return { readiness: Readiness.NEEDS_LOGIN, authLabel: 'authentication unknown', detail: 'Run `claude` once to log in, or set ANTHROPIC_API_KEY.' };
+    return { readiness: Readiness.NEEDS_LOGIN, authLabel: 'Claude native login required', detail: 'Run `claude auth login`, or explicitly select an environment-based auth mode.' };
   },
 
   capabilities() {
@@ -142,7 +248,8 @@ export const claudeCodeAdapter = {
       [Capability.RUNTIME_MODEL_OBSERVATION]: CapabilityState.SUPPORTED, // stream system.init/result
       [Capability.TOOL_EVENTS]: CapabilityState.SUPPORTED,
       [Capability.USAGE_REPORTING]: CapabilityState.SUPPORTED, // result.usage
-      [Capability.SANDBOX_CONTROLS]: CapabilityState.SUPPORTED, // --permission-mode
+      // --permission-mode controls approvals, not filesystem/network sandboxing.
+      [Capability.SANDBOX_CONTROLS]: CapabilityState.UNKNOWN,
       [Capability.APPROVAL_CONTROLS]: CapabilityState.SUPPORTED,
       [Capability.PROVIDER_SELECTION]: CapabilityState.UNKNOWN,
       [Capability.NETWORK_POLICY_CONTROLS]: CapabilityState.UNKNOWN,
@@ -154,7 +261,7 @@ export const claudeCodeAdapter = {
   prepareInvocation(ctx) {
     const exe = resolveExe();
     if (!exe) throw new Error('claude executable not found');
-    const argv = ['--print', '--output-format', 'stream-json', '--verbose'];
+    const argv = ['--print', '--output-format', 'stream-json', '--verbose', '--setting-sources', 'project,local'];
     // Permission mode is a VISIBLE seat setting; default is the non-dangerous acceptEdits.
     const mode = ctx.permissionMode || 'acceptEdits';
     argv.push('--permission-mode', mode);
@@ -169,14 +276,15 @@ export const claudeCodeAdapter = {
       executable: exe,
       argv,
       env: {},
-      authEnvNames: ['ANTHROPIC_API_KEY'], // ONLY this auth var may be forwarded
+      authMode: normalizeAuthMode(ctx.authMode),
+      authEnvNames: claudeAuthEnvNames(ctx),
       stdinPrompt: true,
     };
   },
 
   parseEvents: claudeParseEvents,
   finalize(state) {
-    return { finalText: state.finalText || '', sessionId: state.sessionId || null, usage: state.usage || null, reportedModel: state.reportedModel || null };
+    return { finalText: state.finalText || '', sessionId: state.sessionId || null, usage: state.usage || null, reportedModel: state.reportedModel || null, reportedModels: state.reportedModels || [] };
   },
   async runTurn(ctx, hooks) {
     return executeProcessTurn(this, ctx, hooks);

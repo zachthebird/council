@@ -4,6 +4,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tempStore } from './helpers.mjs';
+import { defaultConfig } from '../src/tui/setup.mjs';
 
 const bin = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin', 'moh.mjs');
 
@@ -12,6 +13,13 @@ function run(args, env = {}) {
 }
 
 const ANSI = /\x1b\[[0-9;]*m/;
+
+test('non-interactive setup defaults Claude to native login without implicit API-key forwarding', () => {
+  const config = defaultConfig('claude-code');
+  assert.equal(config.seats[0].authMode, 'native');
+  assert.deepEqual(config.seats[0].authEnvNames, []);
+  assert.equal(config.seats[1].authMode, 'none');
+});
 
 test('gate 4: doctor --json contains no ANSI', () => {
   tempStore();

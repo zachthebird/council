@@ -51,12 +51,12 @@ is `?` wherever Codex is not installed.
 | native_resume | ✓ | ✓ | ? | ? | ? |
 | prompt_rehydrated_continuity | ? | ? | ? | ? | ? |
 | explicit_model_selection | ✓ | ✓ | ? | ? | ? |
-| model_discovery | ? | ? | ? | ? | ? |
+| model_discovery | ? | ? | ✓ | ? | ? |
 | provider_selection | ? | ? | ? | ? | ? |
 | runtime_model_observation | ✓ | ✓ | ? | ? | ? |
 | tool_events | ✓ | ✓ | ? | ? | ? |
 | usage_reporting | ✓ | ✓ | ? | ? | ? |
-| sandbox_controls | ? | ✓ | ? | ? | ? |
+| sandbox_controls | ? | ? | ? | ? | ? |
 | approval_controls | ? | ✓ | ? | ? | ? |
 | network_policy_controls | ? | ? | ? | ? | ? |
 | interactive_auth | ? | ✓ | ✓ | ? | ? |
@@ -69,14 +69,22 @@ Legend: ✓ supported · ✗ unsupported · ? unknown · ~ experimental · ⊘ b
 | Adapter | Runtime-reported model? | Evidence source | Notes |
 | --- | --- | --- | --- |
 | **fake** | Yes (deterministic) | `fake.init` / `fake.final` | Also models a *not-reported* seat and a mid-run fallback. |
-| **claude-code** | Yes | `stream.system.init`, `stream.result.modelUsage` | Verified against `claude --help` (v2.1.x): `-p --output-format stream-json`, `--model`, `--effort`, `--permission-mode`, `--resume`, `--fork-session`. Reuses native login; credentials never read. |
-| **codex-cli** | Unknown until verified | `codex.jsonl` (best-effort) | Flags detected from the installed `codex --help`/`codex exec --help`; JSONL parser is tolerant. Reuses native Codex login. |
+| **claude-code** | Yes | `stream.system.init`, `stream.assistant.message`, `stream.result.model`; a single `modelUsage` key is an unambiguous fallback | Reuses native login by default; environment-based API-key or OAuth-token authorization must be selected explicitly. Credential values are never read or saved. |
+| **codex-cli** | Unknown until verified | `codex.jsonl` (best-effort) | `codex debug models` discovers the catalog for the CLI's current native account/client context, but not for a named profile. Runtime JSONL remains the source of effective-model evidence. |
 | **openclaw** | Unknown | — | Experimental/Unavailable: no verified headless interface; refuses invocation; not granted an author role. |
 | **hermes** | Unknown | — | Blocked/Unavailable: interface unverified; refuses invocation. |
 
+For every seat and turn, moh keeps **requested**, **configured**, and
+**runtime-reported** model identity distinct. Requested is the exact selection (or
+`Harness default`); configured is an offline CLI/config observation and is not execution
+proof; runtime-reported is accepted only from structured harness output and includes its
+evidence source. Catalog source and check time are separate provenance fields.
+
 If a harness reports only an alias, moh displays the alias — it never invents a dated
 model id. With no runtime evidence, moh displays exactly `Effective model: Not reported
-by harness` and shows the requested model separately.
+by harness` and shows requested/configured facts separately. Claude's `modelUsage` is an
+aggregate map that can include auxiliary models, so multiple keys are never treated as
+an ordered fallback history.
 
 ## Built-in adapter notes
 
@@ -86,10 +94,32 @@ Homebrew, `/usr/local/bin`), real-path resolved. Permission mode is a **visible 
 setting** (default `acceptEdits`). `bypassPermissions` requires explicit typed
 confirmation in setup and is never selected silently.
 
+Delegated native login is the default and is checked with `claude auth status --json`
+when the installed CLI supports it. Run `claude auth login` to authorize that CLI.
+`ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are forwarded only when their
+corresponding authorization mode is explicitly selected. The browser stores only the
+mode, variable name, and a sanitized presence label — never the value.
+
+Claude's verified `--permission-mode` controls approval behavior. It is not a verified
+filesystem or network sandbox, so `sandbox_controls` remains **unknown** and moh does
+not claim that a Claude seat is sandboxed.
+
 ### Codex CLI
 Discovery order: `MOH_CODEX_PATH` → `CODEX_PATH` → `PATH` → macOS app-bundle fallback.
 Only flags observed in the installed `--help` are used (no invented flags). Exposes only a
 sanitized readiness state; does not inherit unrelated provider secrets.
+Native authorization is checked with `codex login status`; run `codex login` to sign in
+with ChatGPT OAuth (the default) or the CLI's API-key flow. moh reuses the resulting CLI
+session and never reads or stores the credential.
+When available, `codex debug models` supplies the model catalog for the CLI's current
+native account/client context. A **Latest frontier** selection is accepted only after a
+fresh catalog query confirms that exact model.
+
+If `--profile` is supported, moh can pass a named local Codex profile to the run. The
+current CLI does not support `debug models` scoped to that profile, so moh cannot verify
+its frontier model or supported reasoning levels in advance. With a profile selected,
+use a pinned model or the harness default and treat structured runtime reporting as the
+only effective-model evidence.
 
 ### OpenClaw / Hermes
 Presented honestly as Experimental / Blocked / Unavailable with exact remediation. They

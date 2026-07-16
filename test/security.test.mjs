@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { buildChildEnv } from '../src/process/env-policy.mjs';
 import { redact, redactDeep, sanitizeGitUrl, stripControl } from '../src/security/redact.mjs';
-import { runProcess } from '../src/process/supervisor.mjs';
+import { DEFAULT_LIMITS, runProcess } from '../src/process/supervisor.mjs';
+
+test('default turn timeout permits thorough repository work while retaining a finite hang guard', () => {
+  assert.equal(DEFAULT_LIMITS.timeoutMs, 90 * 60 * 1000);
+});
 
 test('gate 16: child env contains only base + intended auth references', () => {
   process.env.SECRET_UNRELATED = 'do-not-forward';

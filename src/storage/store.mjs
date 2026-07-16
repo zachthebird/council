@@ -3,12 +3,23 @@
 //  - no overlapping writes (single-writer lock file per run)
 //  - no partial state (temp file + fsync + rename)
 //  - no duplicate transitions / replay gaps (monotonic seq, append-only log)
-import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, openSync, closeSync, fsyncSync, readdirSync, appendFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, openSync, closeSync, fsyncSync, readdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { runsDir } from './paths.mjs';
 import { isSafeRunId } from '../core/ids.mjs';
 
 export const SCHEMA_RUN = 1;
+
+/** True if a process id is currently running (POSIX: EPERM means alive-but-ours-not). */
+function processIsLive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
 
 function atomicWrite(file, data) {
   const tmp = `${file}.tmp-${process.pid}`;
@@ -133,6 +144,52 @@ export class RunStore {
     const lock = join(this.runPath(runId), '.lock');
     try {
       if (existsSync(lock)) renameSync(lock, `${lock}.released`);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /**
+   * Acquire the exclusive single-writer DRIVE lock before orchestrating a run.
+   * A fresh run has no `.driving` file, so the atomic O_EXCL create succeeds.
+   * Refuses when another LIVE process already drives the run (concurrent writers
+   * would produce duplicate sequences and a second run.finished), and refuses a
+   * DEAD-owner lock too — that marks an interrupted drive, which must be
+   * restarted with a fresh id rather than silently re-driven from GENERATE
+   * (which repeats already-paid turns). The stuck lock is harmless: `resume
+   * --retry` mints a new run id and never touches it.
+   */
+  acquireDriveLock(runId) {
+    const path = join(this.runPath(runId), '.driving');
+    try {
+      const fd = openSync(path, 'wx'); // O_CREAT | O_EXCL — atomic claim
+      try {
+        writeFileSync(fd, String(process.pid));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      return;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+    let holder = '';
+    try {
+      holder = readFileSync(path, 'utf8').trim();
+    } catch {
+      /* holder vanished mid-read; treat as contended below */
+    }
+    const pid = Number(holder);
+    if (pid === process.pid) return; // re-entrant within the same process
+    if (processIsLive(pid)) {
+      throw new Error(`run ${runId} is already being driven by process ${pid}`);
+    }
+    throw new Error(`run ${runId} was interrupted; start a fresh attempt with \`moh resume ${runId} --retry\``);
+  }
+
+  releaseDriveLock(runId) {
+    try {
+      unlinkSync(join(this.runPath(runId), '.driving'));
     } catch {
       /* best effort */
     }

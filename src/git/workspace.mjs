@@ -204,9 +204,31 @@ export function captureTree(dir) {
     } catch {
       withIdx(['read-tree', EMPTY_TREE_OID]);
     }
-    // All candidate paths: tracked (from base) + untracked non-ignored.
-    const listed = withIdx(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
-    const paths = listed.split('\0').filter(Boolean);
+    // Preserve submodule gitlinks (mode 160000) exactly as HEAD records them: they
+    // have no working-tree blob, so neither the removal nor the add pass may touch
+    // them (dropping an unchanged gitlink silently rewrites the result tree).
+    const gitlinks = new Set();
+    for (const rec of withIdx(['ls-files', '-z', '--stage']).split('\0').filter(Boolean)) {
+      const space = rec.indexOf(' ');
+      const tab = rec.indexOf('\t');
+      if (space < 0 || tab < 0) continue;
+      if (rec.slice(0, space) === '160000') gitlinks.add(rec.slice(tab + 1));
+    }
+    const underGitlink = (p) => {
+      for (const g of gitlinks) if (p === g || p.startsWith(g + '/')) return true;
+      return false;
+    };
+
+    // PASS 1 — removals first. Clear every non-gitlink entry seeded from HEAD so a
+    // file<->directory replacement can never leave a stale entry that makes a path
+    // "appear as both a file and a directory" at write-tree. Order no longer matters.
+    for (const p of withIdx(['ls-files', '-z', '--cached']).split('\0').filter(Boolean)) {
+      if (!gitlinks.has(p)) withIdx(['update-index', '--force-remove', '--', p]);
+    }
+
+    // PASS 2 — add current working-tree content. After pass 1 the index holds only
+    // gitlinks, so --others now lists every non-ignored file (unchanged ones too).
+    const paths = withIdx(['ls-files', '-z', '--others', '--exclude-standard']).split('\0').filter(Boolean);
     const seen = new Set();
     // Real path of the workspace root — the root itself may live under a symlinked
     // temp dir (e.g. macOS /var -> /private/var), so resolve it before containment checks.
@@ -219,25 +241,19 @@ export function captureTree(dir) {
     for (const p of paths) {
       if (seen.has(p)) continue;
       seen.add(p);
+      if (underGitlink(p)) continue; // never descend into a preserved submodule
       const abs = join(dir, p);
 
       // SYMLINK-ESCAPE DEFENSE: refuse any path whose *intermediate* directory
       // components are symlinks (a tracked dir replaced by a symlink to external
-      // data would otherwise let hash-object read outside the workspace). If an
-      // ancestor is a symlink, drop the on-disk view and force-remove the entry so
-      // the candidate tree never contains escaped content.
-      if (ancestorIsSymlink(dir, p)) {
-        withIdx(['update-index', '--force-remove', '--', p]);
-        continue;
-      }
+      // data would otherwise let hash-object read outside the workspace).
+      if (ancestorIsSymlink(dir, p)) continue;
 
       let st;
       try {
         st = lstatSync(abs); // lstat: never follows the final component
       } catch {
-        // Present in index but gone on disk -> deletion.
-        withIdx(['update-index', '--force-remove', '--', p]);
-        continue;
+        continue; // vanished between listing and stat
       }
 
       let oid;
@@ -255,21 +271,14 @@ export function captureTree(dir) {
         try {
           real = realpathSync(abs);
         } catch {
-          withIdx(['update-index', '--force-remove', '--', p]);
           continue;
         }
         const rel = relative(dirRoot, real);
-        if (rel.startsWith('..') || isAbsolute(rel)) {
-          withIdx(['update-index', '--force-remove', '--', p]);
-          continue;
-        }
+        if (rel.startsWith('..') || isAbsolute(rel)) continue;
         oid = git(dir, ['hash-object', '-w', '--no-filters', '--', abs], {}, idx);
         mode = st.mode & 0o111 ? '100755' : '100644';
       } else {
-        // Directory (file->dir replacement), FIFO, socket, or device: not a blob.
-        // Force-remove any stale index entry so write-tree does not conflict/hang.
-        withIdx(['update-index', '--force-remove', '--', p]);
-        continue;
+        continue; // directory / FIFO / socket / device: nothing to add
       }
       withIdx(['update-index', '--add', '--cacheinfo', `${mode},${oid},${p}`]);
     }

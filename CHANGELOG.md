@@ -37,4 +37,4 @@ capabilities should be read as described rather than as guarantees.
 - **Packaging and CI**, including tests that run with no paid calls and no
   login.
 
-[0.1.0]: https://github.com/zachthebird/mixture-of-harnesses/releases/tag/v0.1.0
+[0.1.0]: https://github.com/zachthebird/council/releases/tag/v0.1.0

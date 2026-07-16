@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { RunStore } from '../storage/store.mjs';
 import { parseFlags } from './args.mjs';
-import { redactDeep, stripControl } from '../security/redact.mjs';
+import { redactDeep, stripControl, scrubUserPaths } from '../security/redact.mjs';
 import { effectiveModelLine, identityLine } from '../core/provenance.mjs';
 import { out, err, c } from './ui.mjs';
 
@@ -15,7 +15,8 @@ function sanitizeReceipt(receipt) {
   for (const s of r.seats || []) {
     if (s.provenance?.harnessPath) s.provenance.harnessPath = basename(s.provenance.harnessPath);
   }
-  return r;
+  // Final pass: collapse any remaining home-dir path in an unenumerated field.
+  return scrubUserPaths(r);
 }
 /** Neutralize control chars / markdown-breaking content in a rendered value. */
 function md(v) {
@@ -38,7 +39,10 @@ function sanitizeState(state) {
   };
   for (const p of Object.values(s.provenanceBySeat || {})) scrubProv(p);
   for (const turns of Object.values(s.turnsBySeat || {})) for (const t of turns || []) scrubProv(t.provenance);
-  return s;
+  // Final pass: collapse any home-dir path that survived in an unenumerated
+  // field (error strings, review prose, config) — the privacy-safe export must
+  // never leak the username / home path.
+  return scrubUserPaths(s);
 }
 
 export async function exportRun(rest) {

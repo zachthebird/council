@@ -52,10 +52,10 @@
   "devDependencies": {},
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zachthebird/mixture-of-harnesses.git"
+    "url": "git+https://github.com/zachthebird/council.git"
   },
-  "homepage": "https://github.com/zachthebird/mixture-of-harnesses#readme",
+  "homepage": "https://github.com/zachthebird/council#readme",
   "bugs": {
-    "url": "https://github.com/zachthebird/mixture-of-harnesses/issues"
+    "url": "https://github.com/zachthebird/council/issues"
   }
 }
