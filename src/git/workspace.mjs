@@ -24,7 +24,29 @@ const NULL_DEVICE = platform() === 'win32' ? 'NUL' : '/dev/null';
  *  - system/global config disabled and hooks/fsmonitor neutralized so attacker
  *    config cannot execute code or alter object resolution.
  */
+/**
+ * Refuse to run git in a worktree whose `.git` has been replaced by a symlink
+ * or a gitdir-redirect FILE. A harness can write such a redirect during its
+ * turn; without this guard the tool's later captureTree / commit-tree work
+ * would read from and write into an ARBITRARY repository (a real escape,
+ * reproduced against captureTree). `.git` legitimately absent is fine — git
+ * init/clone create a real one during workspace preparation.
+ */
+function assertRealGitDir(cwd) {
+  const dotGit = join(cwd, '.git');
+  let st;
+  try {
+    st = lstatSync(dotGit);
+  } catch {
+    return; // absent: prep-time init/clone, or a non-repo cwd — nothing to escape
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new Error(`refusing git operation: ${dotGit} is not a real .git directory (symlink or gitdir redirect)`);
+  }
+}
+
 function git(cwd, args, { input = null, buffer = false, deterministic = false } = {}, indexFile = null) {
+  assertRealGitDir(cwd);
   const env = buildChildEnv({}).env;
   env.GIT_TERMINAL_PROMPT = '0';
   env.GIT_OPTIONAL_LOCKS = '0';
